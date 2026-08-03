@@ -65,7 +65,68 @@ npx expo start --tunnel
 
 ---
 
-## 2. Build an installable APK — fully local
+## 2. Build & run in Android Studio (primary workflow)
+
+The native project lives in `android/` and **is tracked in git**, so it survives a clean
+checkout. You do not need to generate anything before opening it.
+
+> ⚠️ **Never run `npx expo prebuild --clean`.** It deletes and regenerates `android/`, wiping
+> any native edits and your IDE state. The project is already generated and configured.
+
+### 2a. Open it
+
+Android Studio → **Open** → select the **`android` folder** (not the repo root):
+
+```
+C:\Users\MuditSengar\FPO\FPO-Setu-Mobile\android
+```
+
+Wait for the Gradle sync to finish. `local.properties` (your SDK path) is generated
+automatically on first open and is deliberately gitignored.
+
+### 2b. Run the **debug** variant — needs Metro
+
+Debug builds do **not** contain the JS bundle; they load it from the Metro dev server at
+runtime. So start Metro **first**, in a terminal, and leave it running:
+
+```bash
+cd C:\Users\MuditSengar\FPO\FPO-Setu-Mobile && npm start
+```
+
+Then hit **▶ Run** in Android Studio.
+
+On a **physical device over USB**, also forward the Metro port or the app can't reach your PC:
+
+```bash
+%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe reverse tcp:8081 tcp:8081
+```
+
+> If you see a white screen or *"Unable to load script"*, it's almost always this: Metro isn't
+> running, or the port isn't forwarded.
+
+### 2c. Build the **release** variant — standalone, no Metro
+
+Release builds embed the JS bundle (`react { bundleCommand = "export:embed" }`), so the APK
+runs on its own.
+
+1. **Build → Select Build Variant…** → set the `app` module to **`release`**
+2. **Build → Build Bundle(s) / APK(s) → Build APK(s)**
+3. Click **locate** in the notification, or find it at:
+
+```
+android\app\build\outputs\apk\release\app-release.apk
+```
+
+> Leaving the variant on `debug` is the most common mistake here — you'll get an APK that
+> white-screens on any machine without your Metro server running.
+
+Release is signed with the React Native template's debug keystore (`android/app/debug.keystore`,
+password `android`), so it installs directly. That keystore is public and fine for sideloading —
+generate a real upload key before any Play Store submission.
+
+---
+
+## 3. Build an installable APK — fully local (CLI)
 
 Everything below runs on this machine. No source code is uploaded anywhere.
 The native `android/` project is already generated and the release build is signed with the
@@ -109,9 +170,8 @@ Install on a connected device or running emulator:
 
 ### Option C — Android Studio GUI
 
-1. Android Studio → **Open** → `C:\Users\MuditSengar\FPO\FPO-Setu-Mobile\android`
-2. Wait for the Gradle sync.
-3. **Build → Build Bundle(s) / APK(s) → Build APK(s)**
+See [section 2](#2-build--run-in-android-studio-primary-workflow) — that's the primary
+workflow and covers the build-variant trap the CLI options don't have.
 
 ---
 
@@ -138,13 +198,28 @@ shells, so:
 
 ---
 
-## 3. Regenerating the native project
+## 4. Changing native config (app name, icon, package id)
 
-`android/` is generated output — safe to delete and recreate. Edit `app.json`, then:
+`android/` is **tracked in git and hand-maintained** — it is no longer disposable output.
+
+For most changes, edit the native files directly:
+
+| Change | File |
+|---|---|
+| App display name | `android/app/src/main/res/values/strings.xml` |
+| Package / applicationId | `android/app/build.gradle` + `android/app/src/main/java/com/fposetu/mobile/` |
+| Version name / code | `android/app/build.gradle` |
+| Permissions | `android/app/src/main/AndroidManifest.xml` |
+| Icons / splash | `android/app/src/main/res/mipmap-*`, `drawable-*` |
+
+If you ever do need to regenerate from `app.json`, commit first so you can diff and restore
+anything hand-edited:
 
 ```bash
-npm run prebuild
+git add -A && git commit -m "checkpoint before prebuild" && npx expo prebuild --platform android
 ```
+
+Omit `--clean` — it deletes the folder outright rather than merging.
 
 ---
 
