@@ -1,20 +1,31 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import React from "react";
+import { StatusBar } from "expo-status-bar";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import { AppStateProvider } from "./src/lib/app-state";
+import { Toaster } from "./src/components/ui/Toast";
+import { RootNavigator } from "./src/navigation";
 
+/**
+ * App root — the React Native counterpart of the web app's src/routes/__root.tsx.
+ *
+ * The web provider stack was:
+ *   QueryClientProvider -> AppStateProvider -> DomTranslator -> <Outlet/> -> <Toaster/>
+ *
+ * Here:
+ *  - QueryClientProvider is omitted: the web app wired it up but had ZERO
+ *    useQuery/useMutation consumers (all data is local mock data). Add it back
+ *    when a real backend lands.
+ *  - DomTranslator is gone; translation now happens in components/ui/Text.tsx.
+ *  - SafeAreaProvider replaces the SSR HTML document shell.
+ */
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <SafeAreaProvider>
+      <AppStateProvider>
+        <StatusBar style="dark" />
+        <RootNavigator />
+        <Toaster />
+      </AppStateProvider>
+    </SafeAreaProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});

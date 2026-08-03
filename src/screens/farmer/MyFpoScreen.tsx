@@ -1,0 +1,397 @@
+import React, { useEffect, useMemo, useState } from "react";
+import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
+import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
+import {
+  Building2, ChevronDown, ChevronUp, Lightbulb, LineChart as LineIcon,
+  ListOrdered, MapPin, Sprout, TrendingUp, Users,
+} from "lucide-react-native";
+import {
+  DAILY_APMC_PRICES, DEFAULT_FARMER_ID, FARMERS, FPOS, fpoById,
+} from "../../lib/mockData";
+import { colors, radius, spacing } from "../../theme";
+import { RoleShell } from "../../components/layout/RoleShell";
+import {
+  Badge, Button, Card, CardContent, CardHeader, CardTitle, Field, Input,
+  Muted, Select, Stat, Table, Text, toast,
+} from "../../components/ui";
+import { EmptyHint, Meta, Segmented } from "../../components/common";
+import { LineChart } from "../../components/charts";
+import type { FarmerTabParamList } from "../../navigation/types";
+
+type Sub = null | "market" | "fpo" | "near";
+
+const inr = (n: number) => n.toLocaleString("en-IN");
+
+/** Ported from the web app's src/routes/farmer.my-fpo.tsx */
+export function MyFpoScreen() {
+  const nav = useNavigation();
+  const route = useRoute<RouteProp<FarmerTabParamList, "MyFpo">>();
+  const [sub, setSub] = useState<Sub>(null);
+
+  // The web app read a `?sub=` query string off window.location. The RN equivalent
+  // is a navigation param, so deep links / in-app nudges keep working.
+  useEffect(() => {
+    const p = route.params?.sub;
+    if (p === "market" || p === "fpo" || p === "near") setSub(p);
+  }, [route.params?.sub]);
+
+  return (
+    <RoleShell accent="farmer" screenName="My FPO" onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}>
+      <View style={s.chipGrid}>
+        <SquareChip active={sub === "market"} onPress={() => setSub(sub === "market" ? null : "market")}
+          icon={<TrendingUp size={18} color={sub === "market" ? "#fff" : colors.farmer} />} title="Market Insights" />
+        <SquareChip active={sub === "fpo"} onPress={() => setSub(sub === "fpo" ? null : "fpo")}
+          icon={<Building2 size={18} color={sub === "fpo" ? "#fff" : colors.farmer} />} title="FPO details" />
+        <SquareChip active={sub === "near"} onPress={() => setSub(sub === "near" ? null : "near")}
+          icon={<MapPin size={18} color={sub === "near" ? "#fff" : colors.farmer} />} title="FPOs near me" />
+      </View>
+
+      {sub === null && <EmptyHint>Tap one of the three buttons above to open that section.</EmptyHint>}
+      {sub === "market" && <MarketInsights />}
+      {sub === "fpo" && <MyFpoDetails />}
+      {sub === "near" && <NearbyFpos />}
+    </RoleShell>
+  );
+}
+
+function SquareChip({ active, onPress, icon, title }: { active: boolean; onPress: () => void; icon: React.ReactNode; title: string }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[s.squareChip, active ? { backgroundColor: colors.farmer, borderColor: colors.farmer } : null]}
+    >
+      {icon}
+      <Text size="xxs" weight="700" center color={active ? "#ffffff" : colors.foreground}>{title}</Text>
+    </Pressable>
+  );
+}
+
+function MarketInsights() {
+  const { width } = useWindowDimensions();
+  const chartW = width - spacing.lg * 2 - spacing.lg * 2;
+  const farmer = FARMERS.find((f) => f.id === DEFAULT_FARMER_ID)!;
+  const cropOptions = farmer.crops;
+  const [crop, setCrop] = useState(cropOptions[0]);
+  const [duration, setDuration] = useState<"1w" | "1m">("1m");
+  const [showApmcChart, setShowApmcChart] = useState(false);
+  const [showDailyChart, setShowDailyChart] = useState(false);
+
+  const series = DAILY_APMC_PRICES[crop] ?? DAILY_APMC_PRICES.Onion;
+  const sliced = duration === "1w" ? series.slice(-7) : series;
+
+  // Simulated FPO-vs-APMC monthly snapshot — logic preserved from the web app.
+  const cropPriceHistory = useMemo(() => {
+    const base = series[series.length - 1]?.price ?? 1500;
+    const months = ["Dec", "Jan", "Feb", "Mar", "Apr", "May"];
+    return months.map((m, i) => ({
+      month: m,
+      apmc: Math.round(base * (0.85 + i * 0.025)),
+      fpo: Math.round(base * (0.85 + i * 0.025) * 1.22),
+    }));
+  }, [series]);
+
+  const latest = sliced.slice().reverse().slice(0, 10);
+
+  return (
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle color={colors.farmer}>FPO vs APMC · last 6 months</CardTitle>
+          <View style={{ marginTop: spacing.sm }}>
+            <Field label="Crop">
+              <Select value={crop} options={cropOptions} onChange={setCrop} />
+            </Field>
+          </View>
+        </CardHeader>
+        <CardContent>
+          <Table
+            columns={[
+              { key: "month", label: "Month" },
+              { key: "apmc", label: "APMC ₹/q", align: "right" },
+              { key: "fpo", label: "FPO ₹/q", align: "right" },
+              { key: "uplift", label: "Uplift", align: "right" },
+            ]}
+            rows={cropPriceHistory.map((r) => ({
+              month: r.month,
+              apmc: inr(r.apmc),
+              fpo: inr(r.fpo),
+              uplift: (
+                <Text size="xs" color={colors.farmer} style={{ textAlign: "right" }}>
+                  {`+${Math.round(((r.fpo - r.apmc) / r.apmc) * 100)}%`}
+                </Text>
+              ),
+            }))}
+          />
+          <View style={{ alignItems: "flex-end", marginTop: spacing.md }}>
+            <Button variant="outline" size="sm" accent={colors.farmer}
+              icon={<LineIcon size={12} color={colors.farmer} />}
+              onPress={() => setShowApmcChart((v) => !v)}>
+              {showApmcChart ? "Hide chart" : "View chart"}
+            </Button>
+          </View>
+          {showApmcChart && (
+            <View style={{ marginTop: spacing.md }}>
+              <LineChart
+                width={chartW}
+                labels={cropPriceHistory.map((r) => r.month)}
+                series={[
+                  { key: "fpo", label: "FPO", color: colors.farmer, points: cropPriceHistory.map((r) => r.fpo) },
+                  { key: "apmc", label: "APMC", color: colors.mutedForeground, points: cropPriceHistory.map((r) => r.apmc) },
+                ]}
+              />
+            </View>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{`Daily APMC prices · ${crop}`}</CardTitle>
+          <View style={{ flexDirection: "row", justifyContent: "flex-end", marginTop: spacing.sm }}>
+            <Segmented
+              options={["1w", "1m"] as const}
+              value={duration}
+              onChange={setDuration}
+              accent={colors.farmer}
+              labelOf={(v) => (v === "1w" ? "1 week" : "1 month")}
+            />
+          </View>
+        </CardHeader>
+        <CardContent>
+          <Table
+            columns={[
+              { key: "date", label: "Date" },
+              { key: "price", label: "Price ₹/q", align: "right" },
+            ]}
+            rows={latest.map((r) => ({ date: r.date, price: inr(r.price) }))}
+          />
+          <View style={s.rowBetween}>
+            <Muted style={{ flex: 1 }}>
+              {`Showing latest ${Math.min(10, sliced.length)} of ${sliced.length} days.`}
+            </Muted>
+            <Button variant="outline" size="sm" accent={colors.farmer}
+              icon={<ListOrdered size={12} color={colors.farmer} />}
+              onPress={() => setShowDailyChart((v) => !v)}>
+              {showDailyChart ? "Hide chart" : "View chart"}
+            </Button>
+          </View>
+          {showDailyChart && (
+            <View style={{ marginTop: spacing.md }}>
+              <LineChart
+                width={chartW}
+                labels={sliced.map((r) => r.date)}
+                series={[{ key: "price", label: crop, color: colors.farmer, points: sliced.map((r) => r.price) }]}
+              />
+            </View>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card style={{ borderColor: colors.accent + "66", backgroundColor: "#FEF6EF" }}>
+        <CardHeader>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Lightbulb size={16} color={colors.accent} />
+            <CardTitle color={colors.accent}>Pro tip</CardTitle>
+          </View>
+        </CardHeader>
+        <CardContent>
+          <Text size="sm">
+            Turmeric demand from processors is high this season. Your soil suits it — consider a 0.5-acre trial. Expected realisation:
+            {" "}
+            <Text size="sm" weight="700">₹11,500/q</Text>
+            {" vs onion ₹1,820/q."}
+          </Text>
+        </CardContent>
+      </Card>
+    </>
+  );
+}
+
+function MyFpoDetails() {
+  const farmer = FARMERS.find((f) => f.id === DEFAULT_FARMER_ID)!;
+  const fpo = fpoById(farmer.fpoId!)!;
+  // Hardcoded local constants — preserved exactly as in the web app.
+  const monthSold = 8, sellPrice = 900, onwardPrice = 1200, fpoProfit = 82000;
+  const profitShare = Math.round((farmer.sharePct / 100) * fpoProfit);
+  const [open, setOpen] = useState(false);
+  const sales = monthSold * sellPrice;
+
+  return (
+    <>
+      <Card style={{ borderColor: colors.farmer + "66", backgroundColor: colors.farmerSoft }}>
+        <CardHeader>
+          <Text size="xxs" weight="700" color={colors.farmer}>YOUR FPO — THIS MONTH</Text>
+        </CardHeader>
+        <CardContent>
+          <View style={{ flexDirection: "row", gap: spacing.md }}>
+            <Placard label="Sales" value={`₹${inr(sales)}`} foot={`${monthSold} q · ₹${sellPrice}/q`} />
+            <Placard label="My Share of Profit" value={`₹${inr(profitShare)}`}
+              foot={`Equity share: ${farmer.sharePct}%`} highlight />
+          </View>
+          <View style={{ alignItems: "flex-end", marginTop: spacing.md }}>
+            <Button variant="outline" size="sm" accent={colors.farmer}
+              onPress={() => setOpen((o) => !o)}
+              icon={open
+                ? <ChevronUp size={12} color={colors.farmer} />
+                : <ChevronDown size={12} color={colors.farmer} />}>
+              {open ? "Hide breakdown" : "Learn More"}
+            </Button>
+          </View>
+          {open && (
+            <View style={s.breakdown}>
+              <KV k="You sold to FPO" v={`${monthSold} q · ₹${sellPrice}/q`} />
+              <KV k="FPO sold onward" v={`${monthSold} q · ₹${onwardPrice}/q`} />
+              <KV k="FPO net profit (month)" v={`₹${inr(fpoProfit)}`} />
+              <KV k="Your equity share" v={`${farmer.sharePct}%`} />
+              <View style={s.dashed} />
+              <Text size="xxs" weight="700" color={colors.farmer}>Your profit share this month</Text>
+              <Text size="xxl" weight="700" color={colors.farmer}>{`₹${inr(profitShare)}`}</Text>
+              <Text size="xs" style={{ marginTop: spacing.sm }}>
+                Your income isn't only what you sold — you also earn a share of the FPO's profit because you're a part-owner. The more you sell through the FPO, the bigger your share.
+              </Text>
+            </View>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Transaction history</CardTitle></CardHeader>
+        <CardContent>
+          <Table
+            minWidth={430}
+            columns={[
+              { key: "date", label: "Date", flex: 1.3 },
+              { key: "crop", label: "Crop" },
+              { key: "qty", label: "Qty (q)", align: "right" },
+              { key: "price", label: "Price ₹/q", align: "right" },
+              { key: "amount", label: "Amount ₹", align: "right", flex: 1.2 },
+            ]}
+            rows={farmer.txns.map((t) => ({
+              date: t.date, crop: t.crop, qty: String(t.qty_q),
+              price: String(t.price), amount: inr(t.amount),
+            }))}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>{`Membership · ${fpo.name}`}</CardTitle></CardHeader>
+        <CardContent>
+          <View style={s.statGrid}>
+            <Stat label="Shareholding" value={`${farmer.sharePct}%`} />
+            <Stat label="Share value" value={`₹${inr(farmer.sharePct * 12500)}`} />
+          </View>
+          <View style={s.statGrid}>
+            <Stat label="Member since" value={farmer.memberSince ?? "—"} />
+            <Stat label="Active txns" value={`${farmer.txns.length}`} />
+          </View>
+        </CardContent>
+      </Card>
+    </>
+  );
+}
+
+function NearbyFpos() {
+  const farmer = FARMERS.find((f) => f.id === DEFAULT_FARMER_ID)!;
+  const recommended = useMemo(
+    () => FPOS.filter((f) => f.district === farmer.district || f.commodities.some((c) => farmer.crops.includes(c))).slice(0, 4),
+    [farmer],
+  );
+  const [openFor, setOpenFor] = useState<string | null>(null);
+
+  return (
+    <>
+      <Text size="lg" weight="700">Nearby FPOs recommended for you</Text>
+      {recommended.map((fpo, idx) => {
+        const dist = 4 + idx * 6;
+        const uplift = Math.round(((fpo.avgPriceRealisation - fpo.apmcPrice) / fpo.apmcPrice) * 100);
+        return (
+          <Card key={fpo.id}>
+            <CardContent style={{ paddingTop: spacing.lg }}>
+              <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                <View style={{ flex: 1 }}>
+                  <Text size="sm" weight="700">{fpo.name}</Text>
+                  <Muted style={{ marginTop: 2 }}>{fpo.tagline}</Muted>
+                </View>
+                <Badge color={colors.farmer} bg={colors.farmerSoft}>{fpo.tier}</Badge>
+              </View>
+              <View style={s.metaGrid}>
+                <Meta icon={<MapPin size={12} color={colors.mutedForeground} />} label={`${dist} km · ${fpo.block}, ${fpo.district}`} />
+                <Meta icon={<Users size={12} color={colors.mutedForeground} />} label={`${fpo.members} members`} />
+                <Meta icon={<Sprout size={12} color={colors.mutedForeground} />} label={fpo.commodities.join(", ")} />
+                <Meta icon={<TrendingUp size={12} color={colors.mutedForeground} />} label={`+${uplift}% vs APMC (₹${fpo.avgPriceRealisation}/q)`} />
+              </View>
+              <Button full accent={colors.farmer} onPress={() => setOpenFor(fpo.id)} style={{ marginTop: spacing.sm }}>
+                Apply for Membership
+              </Button>
+              {openFor === fpo.id && <ApplyForm fpoName={fpo.name} onDone={() => setOpenFor(null)} />}
+            </CardContent>
+          </Card>
+        );
+      })}
+    </>
+  );
+}
+
+function ApplyForm({ fpoName, onDone }: { fpoName: string; onDone: () => void }) {
+  const [name, setName] = useState("");
+  const [mobile, setMobile] = useState("");
+  const [village, setVillage] = useState("");
+  const [land, setLand] = useState("");
+  const [crops, setCrops] = useState("");
+
+  return (
+    <View style={s.inlineForm}>
+      <Field label="Name"><Input value={name} onChangeText={setName} placeholder="Suresh Patil" /></Field>
+      <Field label="Mobile"><Input value={mobile} onChangeText={setMobile} placeholder="9876xxxxxx" keyboardType="phone-pad" /></Field>
+      <Field label="Village"><Input value={village} onChangeText={setVillage} placeholder="Kotul" /></Field>
+      <Field label="Landholding (acres)"><Input value={land} onChangeText={setLand} placeholder="3.2" keyboardType="numeric" /></Field>
+      <Field label="Crops"><Input value={crops} onChangeText={setCrops} placeholder="Onion, Tomato" /></Field>
+      <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: spacing.sm }}>
+        <Button variant="ghost" size="sm" onPress={onDone}>Cancel</Button>
+        <Button size="sm" accent={colors.farmer}
+          onPress={() => { toast.success(`Application submitted to ${fpoName}.`); onDone(); }}>
+          Submit
+        </Button>
+      </View>
+    </View>
+  );
+}
+
+function Placard({ label, value, foot, highlight }: { label: string; value: string; foot: string; highlight?: boolean }) {
+  return (
+    <View style={[s.placard, highlight ? { backgroundColor: colors.farmer, borderColor: colors.farmer } : null]}>
+      <Text size="xxs" weight="600" color={highlight ? "rgba(255,255,255,0.9)" : colors.mutedForeground}>{label}</Text>
+      <Text size="xxl" weight="700" color={highlight ? "#ffffff" : colors.foreground} style={{ marginTop: 2 }}>{value}</Text>
+      <Text size="xxs" color={highlight ? "rgba(255,255,255,0.9)" : colors.mutedForeground}>{foot}</Text>
+    </View>
+  );
+}
+
+function KV({ k, v }: { k: string; v: string }) {
+  return (
+    <View style={s.rowBetween}>
+      <Muted>{k}</Muted>
+      <Text size="sm" weight="700">{v}</Text>
+    </View>
+  );
+}
+
+const s = StyleSheet.create({
+  chipGrid: { flexDirection: "row", gap: spacing.sm },
+  squareChip: {
+    flex: 1, alignItems: "center", justifyContent: "center", gap: 6,
+    borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg,
+    paddingVertical: spacing.md, paddingHorizontal: 4, backgroundColor: colors.card,
+  },
+  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm, marginTop: spacing.sm },
+  breakdown: { backgroundColor: "rgba(255,255,255,0.75)", borderRadius: radius.md, padding: spacing.lg, marginTop: spacing.md, gap: 4 },
+  dashed: { borderTopWidth: 1, borderStyle: "dashed", borderColor: colors.farmer + "66", marginVertical: spacing.sm },
+  placard: { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, padding: spacing.md, backgroundColor: colors.background },
+  statGrid: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
+  metaGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.md },
+  inlineForm: {
+    borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
+    backgroundColor: colors.mutedBg, padding: spacing.md, marginTop: spacing.md,
+  },
+});
