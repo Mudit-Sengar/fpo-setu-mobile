@@ -3,6 +3,7 @@ import { ActivityIndicator, View } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   Building2, GraduationCap, Handshake, Home, Landmark, ShoppingBag, Star, Users,
 } from "lucide-react-native";
@@ -35,8 +36,24 @@ const FarmerTabs = createBottomTabNavigator<FarmerTabParamList>();
 const FpoStack = createNativeStackNavigator<FpoStackParamList>();
 const BuyerTabs = createBottomTabNavigator<BuyerTabParamList>();
 
-const tabBarStyle = { borderTopColor: colors.border, backgroundColor: colors.background, height: 62, paddingBottom: 8, paddingTop: 6 };
 const tabLabelStyle = { fontSize: 10, fontWeight: "600" as const };
+
+/**
+ * Tab bar height must account for the bottom safe-area inset, otherwise the
+ * labels sit underneath Android's gesture-navigation pill (and the iOS home
+ * indicator). Hardcoding height/paddingBottom overrides React Navigation's
+ * built-in inset handling, so we add it back explicitly.
+ */
+function useTabBarStyle() {
+  const insets = useSafeAreaInsets();
+  return {
+    borderTopColor: colors.border,
+    backgroundColor: colors.background,
+    height: 58 + insets.bottom,
+    paddingBottom: insets.bottom + 6,
+    paddingTop: 6,
+  };
+}
 
 /**
  * Farmer bottom tabs — the direct successor to the web app's RoleShell mobile
@@ -44,6 +61,7 @@ const tabLabelStyle = { fontSize: 10, fontWeight: "600" as const };
  * replaces the web's "← Home" back-link on every sub-page.
  */
 function FarmerTabNavigator() {
+  const tabBarStyle = useTabBarStyle();
   return (
     <FarmerTabs.Navigator
       screenOptions={{
@@ -96,6 +114,7 @@ function FpoNavigator() {
 
 /** Buyer bottom tabs — mirrors the web RoleShell nav for /buyer. */
 function BuyerNavigator() {
+  const tabBarStyle = useTabBarStyle();
   return (
     <BuyerTabs.Navigator
       screenOptions={{
