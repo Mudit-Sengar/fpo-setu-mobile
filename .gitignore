@@ -38,7 +38,21 @@ yarn-error.*
 
 # generated native folders
 /ios
-/android
+
+# android/ IS tracked on purpose: the project is built and run from Android Studio,
+# so the native project must survive a clean checkout. Do NOT run
+# `expo prebuild --clean` — it deletes and regenerates this folder.
+# Only build output and machine-local files are excluded below.
+android/build/
+android/.gradle/
+android/.idea/
+android/.kotlin/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+
+# IDE
+.idea/
 
 # built artifacts
 *.apk
