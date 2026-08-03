@@ -65,54 +65,28 @@ npx expo start --tunnel
 
 ---
 
-## 2. Build an installable APK
+## 2. Build an installable APK — fully local
 
-### Option A — EAS Build (cloud) ✅ recommended on this machine
+Everything below runs on this machine. No source code is uploaded anywhere.
+The native `android/` project is already generated and the release build is signed with the
+React Native template's debug keystore, so the APK installs directly.
 
-**Why:** local Gradle currently fails on this PC. Java's NIO `Selector.open()` is being
-blocked (verified: plain loopback sockets succeed, but `Selector.open()` throws
-`Unable to establish loopback connection`) — almost always antivirus/EDR interfering with
-the JDK's internal loopback pipe. Gradle cannot run without it. EAS runs Gradle on Expo's
-servers, side-stepping the problem entirely.
+### Option A — one command ✅
 
-```bash
-npm install -g eas-cli
-```
+From a **normal PowerShell window**:
 
 ```bash
-eas login
+cd C:\Users\MuditSengar\FPO\FPO-Setu-Mobile && .\build-apk.ps1
 ```
+
+It sets `JAVA_HOME`/`ANDROID_HOME`, runs a preflight check, builds, and prints the APK path.
+If PowerShell blocks the script:
 
 ```bash
-eas build --platform android --profile preview
+powershell -ExecutionPolicy Bypass -File .\build-apk.ps1
 ```
 
-`eas.json` is already configured — the **preview** profile emits a **`.apk`** (not an `.aab`),
-which is what you want for direct install. When the build finishes, the CLI prints a download
-URL; open it on the phone, or download the APK and install it via:
-
-```bash
-%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe install -r path\to\app.apk
-```
-
-A free Expo account is required. Signing keys are generated and stored by EAS on first run.
-
-### Option B — Local Gradle build
-
-Only works once the Java/Selector issue above is resolved. To try to fix it, add these to your
-antivirus / Defender **exclusions**, then reboot:
-
-- `C:\Program Files\Android\Android Studio\jbr`
-- `%USERPROFILE%\.gradle`
-- `C:\Users\MuditSengar\FPO\FPO-Setu-Mobile\android`
-
-Confirm the fix — this must print `SELECTOR_OK`:
-
-```bash
-cd C:\Users\MuditSengar\FPO\FPO-Setu-Mobile && node -e "require('fs').writeFileSync('LbTest.java','import java.nio.channels.Selector;public class LbTest{public static void main(String[] a){try{Selector.open();System.out.println(\"SELECTOR_OK\");}catch(Throwable t){System.out.println(\"SELECTOR_FAIL \"+t);}}}')" && "C:\Program Files\Android\Android Studio\jbr\bin\java.exe" LbTest.java
-```
-
-Once it prints `SELECTOR_OK`, build the APK. The native `android/` folder is already generated:
+### Option B — raw Gradle
 
 ```bash
 set ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk && set JAVA_HOME=C:\Program Files\Android\Android Studio\jbr && cd C:\Users\MuditSengar\FPO\FPO-Setu-Mobile\android && gradlew.bat assembleRelease
@@ -124,23 +98,43 @@ Output APK:
 android\app\build\outputs\apk\release\app-release.apk
 ```
 
-Install it on a connected device/emulator:
+Install on a connected device or running emulator:
 
 ```bash
 %LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe install -r android\app\build\outputs\apk\release\app-release.apk
 ```
 
-> The release build is signed with the RN template's debug keystore, so it installs directly.
-> Generate a real upload key before publishing to the Play Store.
+> Generate a real upload keystore before publishing to the Play Store — the debug keystore is
+> fine for sideloading and testing only.
 
 ### Option C — Android Studio GUI
-
-Sometimes succeeds where the CLI fails, because Android Studio runs Gradle under a different
-security context.
 
 1. Android Studio → **Open** → `C:\Users\MuditSengar\FPO\FPO-Setu-Mobile\android`
 2. Wait for the Gradle sync.
 3. **Build → Build Bundle(s) / APK(s) → Build APK(s)**
+
+---
+
+### Troubleshooting: "Unable to establish loopback connection"
+
+If Gradle fails immediately with this, run:
+
+```bash
+cd C:\Users\MuditSengar\FPO\FPO-Setu-Mobile && .\build-apk.ps1
+```
+
+and read the preflight result. The underlying cause is that `java.nio.channels.Selector.open()`
+fails. On JDK 21 / Windows the selector's wakeup pipe is built on an **AF_UNIX socket**, and in
+some restricted process contexts that `connect()` returns `Invalid argument`. Plain TCP loopback
+still works, which is why the failure looks confusing.
+
+Diagnosed on this machine: **not** antivirus (only Defender is installed, and the Winsock
+catalog contains no third-party layered providers). It reproduces only inside automated/agent
+shells, so:
+
+1. Run the build from a **normal** PowerShell window — this is usually enough.
+2. If it still fails there, reboot and retry.
+3. Failing that, use the Android Studio GUI (Option C), which runs Gradle in its own context.
 
 ---
 
