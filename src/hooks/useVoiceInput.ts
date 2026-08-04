@@ -186,7 +186,10 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
 
     const mod = getSpeechModule();
     if (!mod) {
-      setError("Voice needs the full app build (not Expo Go) — please type instead.");
+      // Reached in Expo Go, and also in any native build where Gradle did not
+      // compile the module (autolinking runs at configure time, so a stale
+      // Gradle sync silently omits it — do a Gradle sync + clean rebuild).
+      setError("Voice isn't available in this build — please type instead.");
       return;
     }
 
