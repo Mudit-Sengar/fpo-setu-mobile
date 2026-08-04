@@ -6,27 +6,45 @@ import { useApp } from "../lib/app-state";
 /**
  * Speech-to-text for Krishi Bandhu, on expo-speech-recognition.
  *
+ * WHY NOT @react-native-voice/voice
+ * ----------------------------------
+ * That package ships no TurboModule/codegen config — it predates the New
+ * Architecture, which this app has enabled (newArchEnabled=true). Reports from
+ * other New-Architecture Expo apps describe it failing silently there (no
+ * error, mic just does nothing), which would be worse than a surfaced error.
+ * expo-speech-recognition is TurboModule-based and used here for that reason.
+ *
  * WHY THIS IS NETWORK-FIRST
  * -------------------------
- * Android routes SpeechRecognizer to a recognition *service*. On Android 13+ the
- * system prefers the ON-DEVICE recogniser (com.google.android.as), which only
- * works for languages the user has explicitly downloaded. If that pack is
- * missing it fails with ERROR_LANGUAGE_NOT_SUPPORTED — which is exactly what we
- * hit, and it is not something we should ask farmers to fix in Settings.
+ * Android routes SpeechRecognizer to a recognition *service*. On Android 13+
+ * the system prefers the ON-DEVICE recogniser (com.google.android.as), which
+ * only works for languages the user has explicitly downloaded — missing pack
+ * => ERROR_LANGUAGE_NOT_SUPPORTED. We never want to ask a farmer to install a
+ * language pack, so every attempt sets:
+ *   - requiresOnDeviceRecognition: false
+ *   - androidIntentOptions.EXTRA_PREFER_OFFLINE: false
+ * which together hint the OS toward network recognition without requiring a
+ * downloaded pack.
  *
- * The fix is to force cloud recognition:
- *   - androidIntentOptions.EXTRA_PREFER_OFFLINE = false  (never require a pack)
- *   - target the network-capable Google service explicitly, not the on-device one
+ * WHAT CHANGED HERE (previously forced a service, which broke instead)
+ * ----------------------------------------------------------------------
+ * An earlier version of this hook *forced* androidRecognitionServicePackage to
+ * "com.google.android.googlequicksearchbox" on every attempt. That is the
+ * right network-capable service on Android <= 12, but is not guaranteed to be
+ * correct on Android 13+ or on OEM skins with a different default assistant —
+ * forcing the wrong component can itself surface as ERROR_NETWORK (a bind
+ * failure to a service that cannot actually reach the network), which is
+ * indistinguishable to us from a real connectivity problem.
  *
- * Cloud recognition needs no downloaded language pack and supports far more
- * languages, including hi-IN and mr-IN. The only user-facing requirement is
- * microphone permission, plus a network connection.
+ * The fix: attempt 0 no longer forces any service — it lets the OS use
+ * whatever the user's actual default recogniser is, which is the
+ * configuration most likely to already work on their phone. Explicit
+ * alternate services are only tried as a fallback, and only for errors that
+ * indicate a service/language mismatch (not for genuine "network" errors,
+ * where retrying a different service wastes time without fixing anything).
  *
- * We then try a small ladder of attempts (see buildAttempts) so a single
- * unsupported combination never dead-ends the farmer.
- *
- * The native module is lazily required and failure-tolerant, so Expo Go (where
- * it does not exist) degrades to typed input instead of crashing.
+ * The native module is lazily required and failure-tolerant, so Expo Go
+ * (where it does not exist) degrades to typed input instead of crashing.
  */
 
 export type VoiceStatus = "idle" | "listening" | "processing";
@@ -34,8 +52,7 @@ export type PermissionOutcome = "granted" | "denied" | "blocked" | "unavailable"
 
 const LOCALE: Record<string, string> = { en: "en-IN", hi: "hi-IN", mr: "mr-IN" };
 
-/** Google's network-capable recogniser. `com.google.android.as` is on-device only. */
-const NETWORK_SERVICE = "com.google.android.googlequicksearchbox";
+/** The on-device-only recogniser — the one that needs a downloaded language pack. */
 const ON_DEVICE_SERVICE = "com.google.android.as";
 
 type SpeechModule = typeof import("expo-speech-recognition");
@@ -90,19 +107,19 @@ async function pickSupportedLocale(mod: SpeechModule, preferred: string): Promis
   }
 }
 
-/** Which recognition service to ask for; undefined = system default. */
-function pickService(mod: SpeechModule): string | undefined {
-  if (Platform.OS !== "android") return undefined;
+/**
+ * Alternate services to try only as a fallback, after the unforced system
+ * default has already failed. Deliberately excludes the on-device-only
+ * recogniser, and deliberately does NOT guess a "correct" service up front —
+ * that guess is exactly what broke this before.
+ */
+function pickFallbackServices(mod: SpeechModule): string[] {
+  if (Platform.OS !== "android") return [];
   try {
     const services = mod.ExpoSpeechRecognitionModule.getSpeechRecognitionServices() ?? [];
-    if (services.includes(NETWORK_SERVICE)) return NETWORK_SERVICE;
-    const fallback = mod.ExpoSpeechRecognitionModule.getDefaultRecognitionService?.()?.packageName;
-    // Never deliberately choose the on-device-only service: that is the thing
-    // that requires a downloaded language pack.
-    if (fallback && fallback !== ON_DEVICE_SERVICE) return fallback;
-    return undefined;
+    return services.filter((s) => s !== ON_DEVICE_SERVICE);
   } catch {
-    return undefined;
+    return [];
   }
 }
 
@@ -112,16 +129,20 @@ interface Attempt {
 }
 
 /**
- * Ordered fallbacks. Every attempt forces EXTRA_PREFER_OFFLINE=false, so none of
- * them require a downloaded language pack.
+ * Ordered attempts. Every attempt forces EXTRA_PREFER_OFFLINE=false, so none
+ * of them require a downloaded language pack. The first two never force a
+ * service — that is the configuration most likely to match what already
+ * works on the user's phone. Explicit services are last-resort only.
  */
-function buildAttempts(locale: string | undefined, service: string | undefined): Attempt[] {
-  const list: Attempt[] = [];
-  if (service && locale) list.push({ locale, service });
-  if (service) list.push({ service });
-  if (locale) list.push({ locale });
-  list.push({});                       // system default, recogniser picks language
-  // De-duplicate structurally identical attempts.
+function buildAttempts(locale: string | undefined, fallbackServices: string[]): Attempt[] {
+  const list: Attempt[] = [
+    { locale },   // system default service, negotiated locale
+    {},           // system default service, recogniser's own default locale
+  ];
+  for (const service of fallbackServices) {
+    list.push({ locale, service });
+    list.push({ service });
+  }
   const seen = new Set<string>();
   return list.filter((a) => {
     const k = `${a.locale ?? ""}|${a.service ?? ""}`;
@@ -131,7 +152,12 @@ function buildAttempts(locale: string | undefined, service: string | undefined):
   });
 }
 
-/** Errors worth trying the next configuration for. */
+/**
+ * Errors worth trying the next configuration for. Deliberately excludes
+ * "network"/"network-timeout": if the device truly has no connectivity,
+ * cycling through services would just stack up several more timeouts without
+ * fixing anything.
+ */
 const RETRYABLE = new Set(["language-not-supported", "service-not-allowed", "client"]);
 
 export interface UseVoiceInput {
@@ -315,8 +341,8 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
     }
 
     const preferred = LOCALE[lang] ?? "en-IN";
-    const [locale, service] = [await pickSupportedLocale(mod, preferred), pickService(mod)];
-    attemptsRef.current = buildAttempts(locale, service);
+    const [locale, fallbackServices] = [await pickSupportedLocale(mod, preferred), pickFallbackServices(mod)];
+    attemptsRef.current = buildAttempts(locale, fallbackServices);
     runAttemptRef.current(0);
   }, [ensurePermission, lang, stop]);
 
@@ -327,8 +353,9 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
 
 /**
  * Farmer-facing messages. Deliberately never surfaces raw Android error codes.
- * Language-pack errors are absent by design: every attempt forces cloud
- * recognition, so a missing on-device pack can no longer be the cause.
+ * Language-pack errors should be rare now: every attempt forces cloud
+ * recognition, and a language/service mismatch is retried automatically
+ * before this message is ever shown.
  */
 function describeError(code?: string): string | null {
   switch (code) {
