@@ -57,3 +57,4 @@ android/local.properties
 # built artifacts
 *.apk
 *.aab
+android/app/release/
