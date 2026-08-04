@@ -21,6 +21,7 @@ export function RoleShell({
   header,
   screenName,
   onOpenFarmerProfile,
+  onBack,
   scroll = true,
   showFooter = false,
 }: {
@@ -30,9 +31,19 @@ export function RoleShell({
   header?: ReactNode;
   screenName?: string;
   onOpenFarmerProfile?: () => void;
+  /** Pass to show a Back button in the header. Farmer Home deliberately omits it. */
+  onBack?: () => void;
   scroll?: boolean;
   showFooter?: boolean;
 }) {
+  // The floating Assistant is removed from the Farmer experience. Deriving this
+  // from `accent` rather than a per-screen prop means any future Farmer screen
+  // is covered automatically and can't reintroduce it by omission.
+  const showAssistant = accent !== "farmer";
+
+  // Farmer header shows "Logout"; FPO/Buyer keep "Switch Role".
+  const actionKey = accent === "farmer" ? "logout" : "switchRole";
+
   const body = (
     <>
       {children}
@@ -42,7 +53,12 @@ export function RoleShell({
 
   return (
     <View style={s.root}>
-      <TopBar accent={accent} onOpenFarmerProfile={onOpenFarmerProfile} />
+      <TopBar
+        accent={accent}
+        onOpenFarmerProfile={onOpenFarmerProfile}
+        onBack={onBack}
+        actionKey={actionKey}
+      />
       {header != null && (
         <View style={{ backgroundColor: accentSoft(accent), borderBottomWidth: 1, borderBottomColor: colors.border }}>
           {header}
@@ -59,7 +75,7 @@ export function RoleShell({
       ) : (
         <View style={[s.flex, s.content]}>{body}</View>
       )}
-      <AssistantWidget screenName={screenName} />
+      {showAssistant && <AssistantWidget screenName={screenName} />}
     </View>
   );
 }

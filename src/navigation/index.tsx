@@ -64,6 +64,9 @@ function FarmerTabNavigator() {
   const tabBarStyle = useTabBarStyle();
   return (
     <FarmerTabs.Navigator
+      // "history" so the header Back button (and hardware back) return to the
+      // previously visited tab instead of always jumping to the first tab.
+      backBehavior="history"
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: colors.farmer,

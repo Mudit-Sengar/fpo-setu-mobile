@@ -108,19 +108,32 @@ export function BackLink({ label = "Home", onPress, icon }: { label?: string; on
 
 /** Segmented pill toggle (durations, Central/State filters, buyer/supplier mode). */
 export function Segmented<T extends string>({
-  options, value, onChange, accent, labelOf,
-}: { options: readonly T[]; value: T; onChange: (v: T) => void; accent: string; labelOf?: (v: T) => string }) {
+  options, value, onChange, accent, labelOf, size = "md",
+}: {
+  options: readonly T[]; value: T; onChange: (v: T) => void; accent: string;
+  labelOf?: (v: T) => string;
+  /** "lg" stretches to full width with larger targets — used for prominent filters. */
+  size?: "md" | "lg";
+}) {
+  const large = size === "lg";
   return (
-    <View style={s.segmented}>
+    <View style={[s.segmented, large && s.segmentedLg]}>
       {options.map((o) => {
         const active = o === value;
         return (
           <Pressable
             key={o}
             onPress={() => onChange(o)}
-            style={[s.segment, active && { backgroundColor: accent }]}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
+            style={[s.segment, large && s.segmentLg, active && { backgroundColor: accent }]}
           >
-            <Text size="xs" weight="600" color={active ? "#ffffff" : colors.foreground}>
+            <Text
+              size={large ? "base" : "xs"}
+              weight="600"
+              center={large}
+              color={active ? "#ffffff" : colors.foreground}
+            >
               {labelOf ? labelOf(o) : o}
             </Text>
           </Pressable>
@@ -128,6 +141,37 @@ export function Segmented<T extends string>({
       })}
     </View>
   );
+}
+
+/**
+ * Square icon+label section selector. Originally local to the My FPO screen;
+ * shared so the Learn screen presents its sections identically.
+ */
+export function SectionCard({
+  title, icon, active, onPress, accent,
+}: { title: string; icon: ReactNode; active: boolean; onPress: () => void; accent: string }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      style={({ pressed }) => [
+        s.sectionCard,
+        active ? { backgroundColor: accent, borderColor: accent } : null,
+        pressed && { opacity: 0.85 },
+      ]}
+    >
+      {icon}
+      <Text size="xs" weight="700" center color={active ? "#ffffff" : colors.foreground}>
+        {title}
+      </Text>
+    </Pressable>
+  );
+}
+
+/** Row wrapper for SectionCard. */
+export function SectionCardRow({ children }: { children: ReactNode }) {
+  return <View style={s.sectionRow}>{children}</View>;
 }
 
 const s = StyleSheet.create({
@@ -163,5 +207,15 @@ const s = StyleSheet.create({
     flexDirection: "row", borderWidth: 1, borderColor: colors.border,
     borderRadius: radius.full, overflow: "hidden",
   },
+  segmentedLg: { borderWidth: 1.5, alignSelf: "stretch" },
   segment: { paddingHorizontal: 12, paddingVertical: 7 },
+  segmentLg: { flex: 1, paddingHorizontal: 10, paddingVertical: 14, minHeight: 50, justifyContent: "center" },
+  sectionCard: {
+    flex: 1, minWidth: 100, minHeight: 88,
+    alignItems: "center", justifyContent: "center", gap: 8,
+    borderWidth: 1.5, borderColor: colors.border, borderRadius: radius.lg,
+    paddingVertical: spacing.lg, paddingHorizontal: spacing.sm,
+    backgroundColor: colors.card,
+  },
+  sectionRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
 });

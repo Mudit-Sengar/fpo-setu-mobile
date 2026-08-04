@@ -763,6 +763,28 @@ export const COMPLIANCE_EXPLAINER = [
   { title: "FSSAI / licences (if applicable)", detail: "Food category licence for processing/branding; APEDA/phyto for exports; FCO/CIB&RC for input trading." },
 ];
 
+/**
+ * Accessors for farmer-scheme content.
+ *
+ * The Government Schemes screen must render scheme copy from the data source
+ * only — no scheme text may be hardcoded in the UI layer. Reading through these
+ * helpers keeps that boundary explicit: when a real backend replaces this
+ * module, only these functions change and no screen code is touched.
+ */
+export function farmerSchemes(body?: FarmerScheme["body"]): FarmerScheme[] {
+  return body ? FARMER_SCHEMES.filter((s) => s.body === body) : FARMER_SCHEMES;
+}
+
+/** One-line description for a scheme, sourced from the data record. */
+export function farmerSchemeDescription(scheme: FarmerScheme): string {
+  return scheme.desc;
+}
+
+/** Destination for both "Know More" and "Apply" (currently the same portal). */
+export function farmerSchemeUrl(scheme: FarmerScheme): string | undefined {
+  return FARMER_SCHEME_URLS[scheme.name];
+}
+
 // === Apply URLs for farmer schemes ===
 export const FARMER_SCHEME_URLS: Record<string, string> = {
   "PM-KISAN": "https://pmkisan.gov.in/",

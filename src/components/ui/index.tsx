@@ -142,6 +142,8 @@ export function Chip({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
       style={[
         s.chip,
         active
@@ -149,7 +151,7 @@ export function Chip({
           : { backgroundColor: colors.background, borderColor: colors.border },
       ]}
     >
-      <Text size="xs" weight="600" color={active ? "#ffffff" : colors.foreground}>{label}</Text>
+      <Text size="sm" weight="600" color={active ? "#ffffff" : colors.foreground}>{label}</Text>
     </Pressable>
   );
 }
@@ -501,11 +503,14 @@ const s = StyleSheet.create({
     borderRadius: radius.full,
     alignSelf: "flex-start",
   },
+  // Enlarged for touch: >=44pt tall target with roomier padding and larger label.
   chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    minHeight: 46,
+    justifyContent: "center",
     borderRadius: radius.full,
-    borderWidth: 1,
+    borderWidth: 1.5,
   },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.md },
   input: {

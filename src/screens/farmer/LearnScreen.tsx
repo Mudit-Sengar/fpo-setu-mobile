@@ -5,8 +5,9 @@ import { BookOpen, Play, Trophy } from "lucide-react-native";
 import { FARMER_COURSES, imgSource, type Thumb } from "../../lib/mockData";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
-import { Card, CardContent, CardHeader, CardTitle, Chip, ChipRow, Dialog, Muted, Text } from "../../components/ui";
-import { EmptyHint, VideoCard } from "../../components/common";
+import { Card, CardContent, CardHeader, CardTitle, Dialog, Muted, Text } from "../../components/ui";
+import { EmptyHint, SectionCard, SectionCardRow, VideoCard } from "../../components/common";
+import { useFarmerBack } from "../../hooks/useFarmerBack";
 
 interface V { title: string; duration: string; transcript: string; thumb: Thumb }
 
@@ -26,17 +27,20 @@ const STORIES: V[] = [
 /** Ported from the web app's src/routes/farmer.learn.tsx */
 export function LearnScreen() {
   const nav = useNavigation();
+  const goBack = useFarmerBack();
   const [tab, setTab] = useState<null | "courses" | "stories">(null);
   const [open, setOpen] = useState<V | null>(null);
 
   return (
-    <RoleShell accent="farmer" screenName="Learn" onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}>
-      <ChipRow>
-        <Chip label="Courses" accent={colors.farmer} active={tab === "courses"}
-          onPress={() => setTab(tab === "courses" ? null : "courses")} />
-        <Chip label="Success Stories" accent={colors.farmer} active={tab === "stories"}
-          onPress={() => setTab(tab === "stories" ? null : "stories")} />
-      </ChipRow>
+    <RoleShell accent="farmer" screenName="Learn" onBack={goBack} onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}>
+      <SectionCardRow>
+        <SectionCard active={tab === "courses"} accent={colors.farmer} title="Courses"
+          onPress={() => setTab(tab === "courses" ? null : "courses")}
+          icon={<BookOpen size={22} color={tab === "courses" ? "#fff" : colors.farmer} />} />
+        <SectionCard active={tab === "stories"} accent={colors.farmer} title="Success Stories"
+          onPress={() => setTab(tab === "stories" ? null : "stories")}
+          icon={<Trophy size={22} color={tab === "stories" ? "#fff" : colors.farmer} />} />
+      </SectionCardRow>
 
       {tab === null && <EmptyHint>Tap a button above to begin.</EmptyHint>}
 

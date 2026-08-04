@@ -12,16 +12,18 @@ import {
   Field, Input, Muted, Select, Text, toast,
 } from "../../components/ui";
 import { EmptyHint, Pill } from "../../components/common";
+import { useFarmerBack } from "../../hooks/useFarmerBack";
 
 type Sub = null | "buyers" | "farmers";
 
 /** Ported from the web app's src/routes/farmer.connect.tsx */
 export function ConnectScreen() {
   const nav = useNavigation();
+  const goBack = useFarmerBack();
   const [sub, setSub] = useState<Sub>(null);
 
   return (
-    <RoleShell accent="farmer" screenName="Connect" onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}>
+    <RoleShell accent="farmer" screenName="Connect" onBack={goBack} onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}>
       <ChipRow>
         <Chip label="Connect with Buyers" accent={colors.farmer} active={sub === "buyers"}
           onPress={() => setSub(sub === "buyers" ? null : "buyers")} />

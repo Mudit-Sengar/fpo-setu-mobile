@@ -29,7 +29,7 @@ export function FarmerProfileScreen() {
   const initials = farmer.name.split(" ").map((p) => p[0]).slice(0, 2).join("");
 
   return (
-    <RoleShell accent="farmer" screenName="Farmer Profile">
+    <RoleShell accent="farmer" screenName="Farmer Profile" onBack={() => nav.goBack()}>
       <View style={s.topRow}>
         <BackLink label="Back" onPress={() => nav.goBack()} icon={<ArrowLeft size={16} color={colors.mutedForeground} />} />
         <Badge color={colors.farmer} bg={colors.farmerSoft}>AgriStack verified</Badge>

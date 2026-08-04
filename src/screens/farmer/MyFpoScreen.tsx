@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
+import { StyleSheet, View, useWindowDimensions } from "react-native";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import {
   Building2, ChevronDown, ChevronUp, Lightbulb, LineChart as LineIcon,
@@ -14,7 +14,8 @@ import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle, Field, Input,
   Muted, Select, Stat, Table, Text, toast,
 } from "../../components/ui";
-import { EmptyHint, Meta, Segmented } from "../../components/common";
+import { EmptyHint, Meta, SectionCard, SectionCardRow, Segmented } from "../../components/common";
+import { useFarmerBack } from "../../hooks/useFarmerBack";
 import { LineChart } from "../../components/charts";
 import type { FarmerTabParamList } from "../../navigation/types";
 
@@ -26,6 +27,7 @@ const inr = (n: number) => n.toLocaleString("en-IN");
 export function MyFpoScreen() {
   const nav = useNavigation();
   const route = useRoute<RouteProp<FarmerTabParamList, "MyFpo">>();
+  const goBack = useFarmerBack();
   const [sub, setSub] = useState<Sub>(null);
 
   // The web app read a `?sub=` query string off window.location. The RN equivalent
@@ -36,33 +38,24 @@ export function MyFpoScreen() {
   }, [route.params?.sub]);
 
   return (
-    <RoleShell accent="farmer" screenName="My FPO" onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}>
-      <View style={s.chipGrid}>
-        <SquareChip active={sub === "market"} onPress={() => setSub(sub === "market" ? null : "market")}
-          icon={<TrendingUp size={18} color={sub === "market" ? "#fff" : colors.farmer} />} title="Market Insights" />
-        <SquareChip active={sub === "fpo"} onPress={() => setSub(sub === "fpo" ? null : "fpo")}
-          icon={<Building2 size={18} color={sub === "fpo" ? "#fff" : colors.farmer} />} title="FPO details" />
-        <SquareChip active={sub === "near"} onPress={() => setSub(sub === "near" ? null : "near")}
-          icon={<MapPin size={18} color={sub === "near" ? "#fff" : colors.farmer} />} title="FPOs near me" />
-      </View>
+    <RoleShell accent="farmer" screenName="My FPO" onBack={goBack} onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}>
+      <SectionCardRow>
+        <SectionCard active={sub === "market"} accent={colors.farmer} title="Market Insights"
+          onPress={() => setSub(sub === "market" ? null : "market")}
+          icon={<TrendingUp size={22} color={sub === "market" ? "#fff" : colors.farmer} />} />
+        <SectionCard active={sub === "fpo"} accent={colors.farmer} title="FPO details"
+          onPress={() => setSub(sub === "fpo" ? null : "fpo")}
+          icon={<Building2 size={22} color={sub === "fpo" ? "#fff" : colors.farmer} />} />
+        <SectionCard active={sub === "near"} accent={colors.farmer} title="FPOs near me"
+          onPress={() => setSub(sub === "near" ? null : "near")}
+          icon={<MapPin size={22} color={sub === "near" ? "#fff" : colors.farmer} />} />
+      </SectionCardRow>
 
       {sub === null && <EmptyHint>Tap one of the three buttons above to open that section.</EmptyHint>}
       {sub === "market" && <MarketInsights />}
       {sub === "fpo" && <MyFpoDetails />}
       {sub === "near" && <NearbyFpos />}
     </RoleShell>
-  );
-}
-
-function SquareChip({ active, onPress, icon, title }: { active: boolean; onPress: () => void; icon: React.ReactNode; title: string }) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[s.squareChip, active ? { backgroundColor: colors.farmer, borderColor: colors.farmer } : null]}
-    >
-      {icon}
-      <Text size="xxs" weight="700" center color={active ? "#ffffff" : colors.foreground}>{title}</Text>
-    </Pressable>
   );
 }
 
@@ -378,12 +371,6 @@ function KV({ k, v }: { k: string; v: string }) {
 }
 
 const s = StyleSheet.create({
-  chipGrid: { flexDirection: "row", gap: spacing.sm },
-  squareChip: {
-    flex: 1, alignItems: "center", justifyContent: "center", gap: 6,
-    borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg,
-    paddingVertical: spacing.md, paddingHorizontal: 4, backgroundColor: colors.card,
-  },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm, marginTop: spacing.sm },
   breakdown: { backgroundColor: "rgba(255,255,255,0.75)", borderRadius: radius.md, padding: spacing.lg, marginTop: spacing.md, gap: 4 },
   dashed: { borderTopWidth: 1, borderStyle: "dashed", borderColor: colors.farmer + "66", marginVertical: spacing.sm },

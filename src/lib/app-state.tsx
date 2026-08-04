@@ -13,6 +13,9 @@ const STRINGS: Record<string, { en: string; hi: string; mr: string }> = {
     mr: "शेतकरी, एफपीओ आणि बाजार जोडणारा सेतू",
   },
   switchRole: { en: "Switch Role", mr: "भूमिका बदला", hi: "भूमिका बदलें" },
+  // Not in the web app — the Farmer header now says "Logout" instead of
+  // "Switch Role". Same underlying behaviour (clears the persisted role).
+  logout: { en: "Logout", hi: "लॉग आउट", mr: "बाहेर पडा" },
   farmer: { en: "Farmer", hi: "किसान", mr: "शेतकरी" },
   fpo: { en: "FPO", hi: "एफपीओ", mr: "एफपीओ" },
   buyer: { en: "Buyer", hi: "खरीदार", mr: "खरेदीदार" },

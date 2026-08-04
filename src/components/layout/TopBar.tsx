@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Modal, Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Check, Globe, Sprout, User } from "lucide-react-native";
+import { Check, ChevronLeft, Globe, Sprout, User } from "lucide-react-native";
 import { useApp, LANG_LABELS, type Lang } from "../../lib/app-state";
 import { DEFAULT_FARMER_ID, FARMERS, FPOS, fpoById } from "../../lib/mockData";
 import { accentColors, colors, radius, spacing, type Accent } from "../../theme";
@@ -15,9 +15,15 @@ import { Button, Text, Muted } from "../ui";
 export function TopBar({
   accent,
   onOpenFarmerProfile,
+  onBack,
+  actionKey = "switchRole",
 }: {
   accent?: Accent;
   onOpenFarmerProfile?: () => void;
+  /** When provided, renders a Back affordance at the far left of the header. */
+  onBack?: () => void;
+  /** Label/behaviour of the right-hand action. Farmer uses "logout". */
+  actionKey?: "switchRole" | "logout";
 }) {
   const { lang, setLang, t, logout, activeFpoId } = useApp();
   const insets = useSafeAreaInsets();
@@ -31,6 +37,17 @@ export function TopBar({
     <View style={[s.header, { paddingTop: insets.top + 6 }]}>
       <View style={s.inner}>
         <View style={s.left}>
+          {onBack != null && (
+            <Pressable
+              onPress={onBack}
+              style={s.backBtn}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
+            >
+              <ChevronLeft size={22} color={accentColor} />
+            </Pressable>
+          )}
           {accent === "farmer" && farmer ? (
             <>
               <Pressable
@@ -76,7 +93,7 @@ export function TopBar({
             <Text size="xxs" weight="600">{LANG_LABELS[lang]}</Text>
           </Pressable>
           <Button variant="outline" size="sm" onPress={logout} accent={accentColor}>
-            {t("switchRole")}
+            {t(actionKey)}
           </Button>
         </View>
       </View>
@@ -136,6 +153,10 @@ const s = StyleSheet.create({
   },
   left: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flex: 1, minWidth: 0 },
   right: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  backBtn: {
+    width: 34, height: 34, borderRadius: radius.md,
+    alignItems: "center", justifyContent: "center", marginRight: 2,
+  },
   avatar: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   logoBox: { width: 32, height: 32, borderRadius: radius.md, alignItems: "center", justifyContent: "center" },
   langBtn: {
