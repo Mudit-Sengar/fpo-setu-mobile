@@ -1,17 +1,17 @@
 import React, { useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
-import { MapPin, MessageCircle, Send } from "lucide-react-native";
+import { Handshake, MapPin, MessageCircle, Send, Users2 } from "lucide-react-native";
 import {
   DEFAULT_FARMER_ID, FARMER_BUYER_MATCHES, FARMERS, SIMILAR_FARMERS,
 } from "../../lib/mockData";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import {
-  Badge, Button, Card, CardContent, CardHeader, CardTitle, Chip, ChipRow,
+  Badge, Button, Card, CardContent, CardHeader, CardTitle,
   Field, Input, Muted, Select, Text, toast,
 } from "../../components/ui";
-import { EmptyHint, Pill } from "../../components/common";
+import { EmptyHint, Pill, SectionCard, SectionCardRow } from "../../components/common";
 import { useFarmerBack } from "../../hooks/useFarmerBack";
 
 type Sub = null | "buyers" | "farmers";
@@ -24,12 +24,14 @@ export function ConnectScreen() {
 
   return (
     <RoleShell accent="farmer" screenName="Connect" onBack={goBack} onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}>
-      <ChipRow>
-        <Chip label="Connect with Buyers" accent={colors.farmer} active={sub === "buyers"}
-          onPress={() => setSub(sub === "buyers" ? null : "buyers")} />
-        <Chip label="Connect with Similar Farmers" accent={colors.farmer} active={sub === "farmers"}
-          onPress={() => setSub(sub === "farmers" ? null : "farmers")} />
-      </ChipRow>
+      <SectionCardRow>
+        <SectionCard active={sub === "buyers"} accent={colors.farmer} title="Connect with Buyers"
+          onPress={() => setSub(sub === "buyers" ? null : "buyers")}
+          icon={<Handshake size={22} color={sub === "buyers" ? "#fff" : colors.farmer} />} />
+        <SectionCard active={sub === "farmers"} accent={colors.farmer} title="Connect with Similar Farmers"
+          onPress={() => setSub(sub === "farmers" ? null : "farmers")}
+          icon={<Users2 size={22} color={sub === "farmers" ? "#fff" : colors.farmer} />} />
+      </SectionCardRow>
 
       {sub === null && <EmptyHint>Pick how you want to connect.</EmptyHint>}
       {sub === "buyers" && <ConnectBuyers />}
