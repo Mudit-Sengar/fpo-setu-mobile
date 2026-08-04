@@ -1,40 +1,78 @@
-import React, { useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import React, { useCallback, useState } from "react";
+import { ActivityIndicator, Pressable, StyleSheet, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import type { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
-import { Building2, GraduationCap, Landmark, Mic, MicOff, Send, Users } from "lucide-react-native";
+import {
+  Building2, GraduationCap, Landmark, Mic, MicOff, Send, Users, X,
+} from "lucide-react-native";
 import { DEFAULT_FARMER_ID, FARMERS } from "../../lib/mockData";
+import {
+  INTENT_EXAMPLES, resolveFarmerIntent, type FarmerDestination,
+} from "../../lib/farmer-intents";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import { Input, Muted, Text, toast } from "../../components/ui";
 import { Tile } from "../../components/common";
-import { useSpeech } from "../../hooks/useSpeech";
+import { useVoiceInput } from "../../hooks/useVoiceInput";
 import type { FarmerTabParamList } from "../../navigation/types";
 
 /**
- * Ported from the web app's src/routes/farmer.index.tsx (Krishi Bandhu home).
- * The keyword-routing regexes are preserved verbatim; only the navigation target
- * changed from a URL path to a tab name.
+ * Farmer Home + the Krishi Bandhu navigator.
+ *
+ * Krishi Bandhu lives on this screen only. Typed text and speech transcripts are
+ * both handed to `resolveFarmerIntent()` and then to `goTo()`, so the two input
+ * modes share one code path — adding an intent in src/lib/farmer-intents.ts makes
+ * it work for voice and text simultaneously.
  */
 export function FarmerHomeScreen() {
   const nav = useNavigation<BottomTabNavigationProp<FarmerTabParamList>>();
   const farmer = FARMERS.find((f) => f.id === DEFAULT_FARMER_ID);
   const [q, setQ] = useState("");
-  const { startListening, listening } = useSpeech();
 
-  function submit() {
-    const t = q.toLowerCase();
-    if (!t.trim()) return;
-    if (/scheme|subsidy|pm-?kisan|insurance|loan|kcc/.test(t)) nav.navigate("Schemes");
-    else if (/learn|course|video|story|fpo basics|how/.test(t)) nav.navigate("Learn");
-    else if (/my fpo|membership|profit|share|market|price|apmc/.test(t)) nav.navigate("MyFpo");
-    else if (/buyer|sell directly|connect/.test(t)) nav.navigate("Connect");
-    else toast.message('Tell me where to go — try "PM-KISAN", "learn videos", or "connect with a buyer for onion".');
+  /** Single navigation sink for every resolved intent. */
+  const goTo = useCallback((destination: FarmerDestination) => {
+    // `req` forces the receiving screen's effect to re-fire even when the same
+    // section is requested twice in a row.
+    const req = Date.now();
+    if (destination.kind === "screen") {
+      nav.getParent()?.navigate(destination.screen as never);
+      return;
+    }
+    switch (destination.tab) {
+      case "MyFpo":   nav.navigate("MyFpo", { sub: destination.sub, req }); break;
+      case "Learn":   nav.navigate("Learn", { sub: destination.sub, req }); break;
+      case "Connect": nav.navigate("Connect", { sub: destination.sub, req }); break;
+      case "Schemes": nav.navigate("Schemes"); break;
+      case "FarmerHome": nav.navigate("FarmerHome"); break;
+    }
+  }, [nav]);
+
+  /** Shared entry point for typed and spoken commands. */
+  const handleCommand = useCallback((raw: string) => {
+    const text = raw.trim();
+    if (text.length === 0) return;
+
+    const intent = resolveFarmerIntent(text);
     setQ("");
-  }
+
+    if (!intent) {
+      toast.message(`I didn't understand that. Try: "${INTENT_EXAMPLES[0]}" or "${INTENT_EXAMPLES[1]}".`);
+      return;
+    }
+    toast.success(`Opening ${intent.label}`);
+    goTo(intent.destination);
+  }, [goTo]);
+
+  const voice = useVoiceInput(handleCommand);
+  const listening = voice.status === "listening";
+  const processing = voice.status === "processing";
 
   return (
-    <RoleShell accent="farmer" screenName="Farmer Home" onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}>
+    <RoleShell
+      accent="farmer"
+      screenName="Farmer Home"
+      onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}
+    >
       <View>
         <Text size="xl" weight="600">
           {"Namaste, "}
@@ -46,38 +84,93 @@ export function FarmerHomeScreen() {
 
       <View style={s.tiles}>
         <Tile label="Know My FPO" accent={colors.farmer} tint={colors.farmerSoft}
-          icon={<Building2 size={26} color={colors.farmer} />} onPress={() => nav.navigate("MyFpo")} />
+          icon={<Building2 size={26} color={colors.farmer} />}
+          onPress={() => goTo({ kind: "tab", tab: "MyFpo" })} />
         <Tile label="Learn" accent="#B45309" tint="#FEF3C7"
-          icon={<GraduationCap size={26} color="#B45309" />} onPress={() => nav.navigate("Learn")} />
+          icon={<GraduationCap size={26} color="#B45309" />}
+          onPress={() => goTo({ kind: "tab", tab: "Learn" })} />
         <Tile label="Connect" accent="#0F766E" tint="#CCFBF1"
-          icon={<Users size={26} color="#0F766E" />} onPress={() => nav.navigate("Connect")} />
+          icon={<Users size={26} color="#0F766E" />}
+          onPress={() => goTo({ kind: "tab", tab: "Connect" })} />
         <Tile label="Gov Schemes" accent="#BE123C" tint="#FFE4E6"
-          icon={<Landmark size={26} color="#BE123C" />} onPress={() => nav.navigate("Schemes")} />
+          icon={<Landmark size={26} color="#BE123C" />}
+          onPress={() => goTo({ kind: "tab", tab: "Schemes" })} />
       </View>
 
-      <View style={s.bandhu}>
+      {/* ---------------- Krishi Bandhu ---------------- */}
+      <View style={[s.bandhu, listening && { borderColor: colors.farmer, borderWidth: 2 }]}>
         <View style={s.bandhuHead}>
-          <View style={s.bandhuIcon}><Text size="xs">🌱</Text></View>
+          <View style={s.bandhuIcon}><Text size="xs" noTranslate>🌱</Text></View>
           <View style={{ flex: 1 }}>
             <Text size="sm" weight="700" color={colors.farmer}>Krishi Bandhu 🌱</Text>
-            <Muted>Platform navigator — tap or speak</Muted>
+            <Muted>
+              {listening ? "Listening… speak now"
+                : processing ? "Working out where to take you…"
+                : "Tell me where to go — type or tap the mic"}
+            </Muted>
           </View>
+          {listening && <View style={s.pulse} />}
         </View>
+
+        {/* Live transcript while speaking */}
+        {listening && voice.partial.length > 0 && (
+          <View style={s.partialBox}>
+            <Text size="sm" color={colors.farmer} noTranslate>{voice.partial}</Text>
+          </View>
+        )}
+
+        {/* Recoverable voice problems, dismissible */}
+        {voice.error != null && voice.error.length > 0 && (
+          <View style={s.errorBox}>
+            <Text size="xs" color={colors.destructive} style={{ flex: 1 }}>{voice.error}</Text>
+            <Pressable onPress={voice.clearError} hitSlop={8} accessibilityLabel="Dismiss">
+              <X size={14} color={colors.destructive} />
+            </Pressable>
+          </View>
+        )}
+
         <View style={s.bandhuRow}>
           <View style={{ flex: 1 }}>
-            <Input value={q} onChangeText={setQ} placeholder="मला मदत करा... / Ask me to take you somewhere" />
+            <Input
+              value={q}
+              onChangeText={setQ}
+              placeholder="मला मदत करा... / e.g. onion price today"
+              editable={!listening}
+            />
           </View>
+
           <Pressable
-            onPress={startListening}
-            style={[s.iconBtn, listening && { backgroundColor: colors.farmer, borderColor: colors.farmer }]}
-            accessibilityLabel={listening ? "Stop voice input" : "Speak"}
+            onPress={listening ? voice.stop : voice.start}
+            disabled={processing}
+            accessibilityRole="button"
+            accessibilityLabel={listening ? "Stop listening" : "Speak your request"}
+            accessibilityState={{ busy: listening || processing }}
+            style={[
+              s.iconBtn,
+              listening && { backgroundColor: colors.farmer, borderColor: colors.farmer },
+              processing && { opacity: 0.5 },
+            ]}
           >
-            {listening ? <MicOff size={16} color="#ffffff" /> : <Mic size={16} color={colors.farmer} />}
+            {processing
+              ? <ActivityIndicator size="small" color={colors.farmer} />
+              : listening
+                ? <MicOff size={18} color="#ffffff" />
+                : <Mic size={18} color={colors.farmer} />}
           </Pressable>
-          <Pressable onPress={submit} style={[s.iconBtn, { backgroundColor: colors.farmer, borderColor: colors.farmer }]} accessibilityLabel="Send">
-            <Send size={16} color="#ffffff" />
+
+          <Pressable
+            onPress={() => handleCommand(q)}
+            accessibilityRole="button"
+            accessibilityLabel="Send"
+            style={[s.iconBtn, { backgroundColor: colors.farmer, borderColor: colors.farmer }]}
+          >
+            <Send size={18} color="#ffffff" />
           </Pressable>
         </View>
+
+        <Muted style={{ marginTop: 2 }}>
+          {`Try: "${INTENT_EXAMPLES[0]}", "${INTENT_EXAMPLES[1]}", "${INTENT_EXAMPLES[2]}"`}
+        </Muted>
       </View>
     </RoleShell>
   );
@@ -94,9 +187,19 @@ const s = StyleSheet.create({
     width: 28, height: 28, borderRadius: 14, backgroundColor: colors.farmerSoft,
     alignItems: "center", justifyContent: "center",
   },
+  pulse: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.destructive },
+  partialBox: {
+    backgroundColor: colors.farmerSoft, borderRadius: radius.md,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+  },
+  errorBox: {
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
+    backgroundColor: "#FDECEA", borderRadius: radius.md,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+  },
   bandhuRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   iconBtn: {
-    width: 40, height: 40, borderRadius: radius.md, borderWidth: 1, borderColor: colors.farmer,
-    alignItems: "center", justifyContent: "center",
+    width: 46, height: 46, borderRadius: radius.md, borderWidth: 1.5,
+    borderColor: colors.farmer, alignItems: "center", justifyContent: "center",
   },
 });

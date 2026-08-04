@@ -35,6 +35,9 @@
         "projectId": "848e1572-1455-4889-86b7-6bf8e332823a"
       }
     },
-    "owner": "mudit_sengar"
+    "owner": "mudit_sengar",
+    "plugins": [
+      "expo-speech-recognition"
+    ]
   }
 }

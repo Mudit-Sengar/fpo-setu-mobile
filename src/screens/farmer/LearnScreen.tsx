@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Image, StyleSheet, View } from "react-native";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
+import type { FarmerTabParamList } from "../../navigation/types";
 import { BookOpen, Play, Trophy } from "lucide-react-native";
 import { FARMER_COURSES, imgSource, type Thumb } from "../../lib/mockData";
 import { colors, radius, spacing } from "../../theme";
@@ -27,9 +28,16 @@ const STORIES: V[] = [
 /** Ported from the web app's src/routes/farmer.learn.tsx */
 export function LearnScreen() {
   const nav = useNavigation();
+  const route = useRoute<RouteProp<FarmerTabParamList, "Learn">>();
   const goBack = useFarmerBack();
   const [tab, setTab] = useState<null | "courses" | "stories">(null);
   const [open, setOpen] = useState<V | null>(null);
+
+  // Section deep-link, used by Krishi Bandhu ("success stories" -> stories).
+  useEffect(() => {
+    const p = route.params?.sub;
+    if (p === "courses" || p === "stories") setTab(p);
+  }, [route.params?.sub, route.params?.req]);
 
   return (
     <RoleShell accent="farmer" screenName="Learn" onBack={goBack} onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}>

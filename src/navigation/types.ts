@@ -16,12 +16,20 @@ export type FarmerStackParamList = {
   FarmerProfile: undefined; // web "/farmer/profile" (reached from the TopBar avatar)
 };
 
+/**
+ * `sub` selects a section within a tab (used by deep links and by Krishi Bandhu
+ * voice/text navigation). `req` is a request nonce: navigating twice to the same
+ * section would otherwise leave route.params unchanged, so the receiving screen's
+ * effect would not re-fire. Callers set it to Date.now().
+ */
+export type SectionParams<S extends string> = { sub?: S; req?: number } | undefined;
+
 export type FarmerTabParamList = {
-  FarmerHome: undefined;                                   // web "/farmer/"
-  MyFpo: { sub?: "market" | "fpo" | "near" } | undefined;  // web "/farmer/my-fpo" (+ ?sub= deep link)
-  Learn: undefined;                                        // web "/farmer/learn"
-  Connect: undefined;                                      // web "/farmer/connect"
-  Schemes: undefined;                                      // web "/farmer/schemes"
+  FarmerHome: undefined;                                    // web "/farmer/"
+  MyFpo: SectionParams<"market" | "fpo" | "near">;          // web "/farmer/my-fpo" (+ ?sub= deep link)
+  Learn: SectionParams<"courses" | "stories">;              // web "/farmer/learn"
+  Connect: SectionParams<"buyers" | "farmers">;             // web "/farmer/connect"
+  Schemes: undefined;                                       // web "/farmer/schemes"
 };
 
 export type FpoStackParamList = {

@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
+import type { FarmerTabParamList } from "../../navigation/types";
 import { Handshake, MapPin, MessageCircle, Send, Users2 } from "lucide-react-native";
 import {
   DEFAULT_FARMER_ID, FARMER_BUYER_MATCHES, FARMERS, SIMILAR_FARMERS,
@@ -19,8 +20,15 @@ type Sub = null | "buyers" | "farmers";
 /** Ported from the web app's src/routes/farmer.connect.tsx */
 export function ConnectScreen() {
   const nav = useNavigation();
+  const route = useRoute<RouteProp<FarmerTabParamList, "Connect">>();
   const goBack = useFarmerBack();
   const [sub, setSub] = useState<Sub>(null);
+
+  // Section deep-link, used by Krishi Bandhu ("sell my onions" -> buyers).
+  useEffect(() => {
+    const p = route.params?.sub;
+    if (p === "buyers" || p === "farmers") setSub(p);
+  }, [route.params?.sub, route.params?.req]);
 
   return (
     <RoleShell accent="farmer" screenName="Connect" onBack={goBack} onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}>

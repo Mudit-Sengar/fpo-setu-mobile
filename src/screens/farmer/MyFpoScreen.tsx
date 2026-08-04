@@ -32,10 +32,11 @@ export function MyFpoScreen() {
 
   // The web app read a `?sub=` query string off window.location. The RN equivalent
   // is a navigation param, so deep links / in-app nudges keep working.
+  // `req` is in the deps so repeat navigations to the same section re-open it.
   useEffect(() => {
     const p = route.params?.sub;
     if (p === "market" || p === "fpo" || p === "near") setSub(p);
-  }, [route.params?.sub]);
+  }, [route.params?.sub, route.params?.req]);
 
   return (
     <RoleShell accent="farmer" screenName="My FPO" onBack={goBack} onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}>
