@@ -1,6 +1,6 @@
 import React from "react";
 import { Pressable, StyleSheet, View } from "react-native";
-import { colors, radius, spacing } from "../theme";
+import { colors, spacing } from "../theme";
 import { Card, CardContent, Muted, Text } from "../components/ui";
 
 export type Mode = "buyer" | "supplier";

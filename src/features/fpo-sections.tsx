@@ -5,13 +5,13 @@ import React, { useMemo, useState } from "react";
 import { StyleSheet, View, useWindowDimensions } from "react-native";
 import {
   AlertTriangle, Banknote, BookOpenCheck, Building2, CalendarDays, CheckCircle2,
-  ChevronRight, FileCheck, GraduationCap, Handshake, LandPlot, Landmark, Mail,
+  ChevronRight, FileCheck, Handshake, LandPlot, Landmark, Mail,
   MessageCircle, Package, Phone, Plus, Send, ShieldCheck, Sparkles, Star, Target,
   Truck, Users, Users2, Volume2, XCircle,
 } from "lucide-react-native";
 import { useApp } from "../lib/app-state";
 import {
-  BUYERS, COMPLIANCE_EXPLAINER, COMPLIANCE_PARTNERS, EXPERTS, FPOS, FPO_MEETINGS,
+  COMPLIANCE_EXPLAINER, COMPLIANCE_PARTNERS, EXPERTS, FPOS, FPO_MEETINGS,
   GOVT_SCHEMES, INPUT_NEEDS, LEDGER, LENDERS, LOGISTICS_PROVIDERS, MEMBER_ENGAGEMENT,
   MENTORS, MGMT_COURSES, SELLER_FEEDBACK, SUPPLIERS, TIER_SCORES, VALUE_COURSES,
   buyersByCategory, cumulativeFor, fpoById, isSchemeEligible, tierOpportunities,
@@ -153,7 +153,7 @@ export function BookkeepingSection() {
           }))}
         />
         <Muted style={{ marginTop: spacing.sm }}>
-          Buyer/Seller IDs link transactions across the app — e.g. MH-AH-2024-00831 appears in farmer Suresh Patil's transaction history.
+          Buyer/Seller IDs link transactions across the app — e.g. MH-AH-2024-00831 appears in farmer Suresh Patil&apos;s transaction history.
         </Muted>
         <AddEntry
           onAdd={(entry) => { setLedger((p) => [...p, entry]); toast.success("Ledger entry added."); }}

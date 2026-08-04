@@ -34,6 +34,9 @@ const KIND_STYLE: Record<ToastKind, { bg: string; icon: React.ReactNode }> = {
   error: { bg: colors.destructive, icon: <XCircle size={16} color="#fff" /> },
 };
 
+/* eslint-disable react-hooks/refs -- Animated.Value is a mutable, ref-like RN API that must be
+   read during render to drive `style`; that's the documented usage pattern for Animated, not a
+   stale-closure bug. Not compatible with the new compiler-oriented rule; safe as-is. */
 function ToastRow({ item, onDone }: { item: ToastItem; onDone: (id: number) => void }) {
   const anim = useRef(new Animated.Value(0)).current;
 
@@ -65,6 +68,7 @@ function ToastRow({ item, onDone }: { item: ToastItem; onDone: (id: number) => v
     </Animated.View>
   );
 }
+/* eslint-enable react-hooks/refs */
 
 /** Mount once at the app root (the web app rendered <Toaster/> in __root.tsx). */
 export function Toaster() {

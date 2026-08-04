@@ -310,7 +310,7 @@ function SupplierView() {
         </CardHeader>
         <CardContent>
           <Muted style={{ marginBottom: spacing.sm }}>
-            Post inputs you can supply — we'll match you with FPOs/farmers who need them.
+            Post inputs you can supply — we&apos;ll match you with FPOs/farmers who need them.
           </Muted>
           <SupplyForm onPost={(p) => {
             const next = [p, ...supplies];

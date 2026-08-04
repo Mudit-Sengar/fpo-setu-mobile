@@ -41,7 +41,7 @@ public class SelProbe {
     catch (Throwable t) { System.out.println("SELECTOR_FAIL " + t); }
   }
 }
-'@ | Out-File -FilePath $probe -Encoding utf8
+'@ | Out-File -FilePath $probe -Encoding ascii
 
 $probeResult = & "$jbr\bin\java.exe" $probe 2>&1 | Out-String
 Remove-Item -Recurse -Force $probeDir -ErrorAction SilentlyContinue

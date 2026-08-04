@@ -6,7 +6,7 @@ import { BookOpen, Play, Trophy } from "lucide-react-native";
 import { FARMER_COURSES, imgSource, type Thumb } from "../../lib/mockData";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
-import { Card, CardContent, CardHeader, CardTitle, Dialog, Muted, Text } from "../../components/ui";
+import { Card, CardContent, CardHeader, CardTitle, Dialog, Muted } from "../../components/ui";
 import { EmptyHint, SectionCard, SectionCardRow, VideoCard } from "../../components/common";
 import { useFarmerBack } from "../../hooks/useFarmerBack";
 
@@ -36,6 +36,7 @@ export function LearnScreen() {
   // Section deep-link, used by Krishi Bandhu ("success stories" -> stories).
   useEffect(() => {
     const p = route.params?.sub;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing a nav-param deep link into local tab state; intentional (see navigation/types.ts SectionParams).
     if (p === "courses" || p === "stories") setTab(p);
   }, [route.params?.sub, route.params?.req]);
 

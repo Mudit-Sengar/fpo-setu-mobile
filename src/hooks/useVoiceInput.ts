@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Linking, Platform } from "react-native";
 import { useIsFocused } from "@react-navigation/native";
+import Constants, { ExecutionEnvironment } from "expo-constants";
 import { useApp } from "../lib/app-state";
 
 /**
@@ -45,6 +46,14 @@ import { useApp } from "../lib/app-state";
  *
  * The native module is lazily required and failure-tolerant, so Expo Go
  * (where it does not exist) degrades to typed input instead of crashing.
+ *
+ * WHY THE EXPO GO CHECK COMES BEFORE require() AT ALL
+ * ----------------------------------------------------
+ * Expo's "Cannot find native module" guard does not behave like a normal
+ * catchable JS Error here — it still surfaces as an uncaught error even from
+ * inside a try/catch around require(). So Expo Go is detected up front via
+ * `expo-constants` and the require is skipped entirely in that environment,
+ * rather than relying on try/catch to paper over a missing native module.
  */
 
 export type VoiceStatus = "idle" | "listening" | "processing";
@@ -62,10 +71,17 @@ let moduleResolved = false;
 function getSpeechModule(): SpeechModule | null {
   if (!moduleResolved) {
     moduleResolved = true;
-    try {
-      cachedModule = require("expo-speech-recognition") as SpeechModule;
-    } catch {
+    // Expo Go can never have this (or any third-party) native module linked —
+    // don't even attempt the require, see the file-level comment above.
+    if (Constants.executionEnvironment === ExecutionEnvironment.StoreClient) {
       cachedModule = null;
+    } else {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports -- must be lazy: a static import throws where the native module doesn't exist.
+        cachedModule = require("expo-speech-recognition") as SpeechModule;
+      } catch {
+        cachedModule = null;
+      }
     }
   }
   return cachedModule;
@@ -73,10 +89,10 @@ function getSpeechModule(): SpeechModule | null {
 
 type Subscription = { remove: () => void };
 function addListener(mod: SpeechModule, event: string, cb: (e: any) => void): Subscription | null {
-  const emitter = mod.ExpoSpeechRecognitionModule as unknown as {
-    addListener?: (e: string, cb: (ev: any) => void) => Subscription;
-  };
   try {
+    const emitter = mod.ExpoSpeechRecognitionModule as unknown as {
+      addListener?: (e: string, cb: (ev: any) => void) => Subscription;
+    };
     return emitter.addListener?.(event, cb) ?? null;
   } catch {
     return null;
@@ -189,6 +205,7 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
 
   /** Run one attempt. Held in a ref so the once-mounted error listener can advance. */
   const runAttemptRef = useRef<(index: number) => void>(() => {});
+  // eslint-disable-next-line react-hooks/refs -- intentional: keeps the once-mounted native event listener (below) calling the latest closure instead of a stale one.
   runAttemptRef.current = (index: number) => {
     const mod = getSpeechModule();
     if (!mod) return;
@@ -223,6 +240,7 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
   // ---- availability -------------------------------------------------------
   useEffect(() => {
     const mod = getSpeechModule();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time native-module availability probe on mount, not a render-driven sync.
     if (!mod) { setAvailable(false); return; }
     try {
       const recognisable = mod.ExpoSpeechRecognitionModule.isRecognitionAvailable();

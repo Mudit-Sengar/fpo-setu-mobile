@@ -35,6 +35,7 @@ export function MyFpoScreen() {
   // `req` is in the deps so repeat navigations to the same section re-open it.
   useEffect(() => {
     const p = route.params?.sub;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing a nav-param deep link into local tab state; intentional (see navigation/types.ts SectionParams).
     if (p === "market" || p === "fpo" || p === "near") setSub(p);
   }, [route.params?.sub, route.params?.req]);
 
@@ -241,7 +242,7 @@ function MyFpoDetails() {
               <Text size="xxs" weight="700" color={colors.farmer}>Your profit share this month</Text>
               <Text size="xxl" weight="700" color={colors.farmer}>{`₹${inr(profitShare)}`}</Text>
               <Text size="xs" style={{ marginTop: spacing.sm }}>
-                Your income isn't only what you sold — you also earn a share of the FPO's profit because you're a part-owner. The more you sell through the FPO, the bigger your share.
+                Your income isn&apos;t only what you sold — you also earn a share of the FPO&apos;s profit because you&apos;re a part-owner. The more you sell through the FPO, the bigger your share.
               </Text>
             </View>
           )}

@@ -27,6 +27,7 @@ export function ConnectScreen() {
   // Section deep-link, used by Krishi Bandhu ("sell my onions" -> buyers).
   useEffect(() => {
     const p = route.params?.sub;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing a nav-param deep link into local tab state; intentional (see navigation/types.ts SectionParams).
     if (p === "buyers" || p === "farmers") setSub(p);
   }, [route.params?.sub, route.params?.req]);
 

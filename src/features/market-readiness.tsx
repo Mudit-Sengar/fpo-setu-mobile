@@ -282,7 +282,7 @@ export function MarketLinkedGrowthPlanning() {
           <CardContent>
             <Text size="sm" weight="700" noTranslate>{`${badge} ${score}% Ready`}</Text>
             <Progress value={score} color={color} height={12} />
-            <Muted>You're on your way — a few improvements will make you buyer-ready.</Muted>
+            <Muted>You&apos;re on your way — a few improvements will make you buyer-ready.</Muted>
           </CardContent>
         </Card>
 
