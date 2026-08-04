@@ -25,6 +25,44 @@ export type PermissionOutcome = "granted" | "denied" | "blocked" | "unavailable"
 
 const LOCALE: Record<string, string> = { en: "en-IN", hi: "hi-IN", mr: "mr-IN" };
 
+const normaliseTag = (s: string) => s.replace(/_/g, "-").toLowerCase();
+
+/**
+ * Choose a locale the device's recogniser actually supports.
+ *
+ * Forcing a hardcoded tag (e.g. "mr-IN") fails with `language-not-supported`
+ * on devices where that language pack isn't installed. Preference order:
+ *   exact match -> same language, any region -> any English -> undefined.
+ *
+ * `undefined` is a valid, useful answer: `lang` is optional in the start
+ * options, and omitting it lets the recogniser use its own default. That is
+ * also the right behaviour on Android <= 12, where getSupportedLocales()
+ * always returns an empty list.
+ */
+async function pickSupportedLocale(mod: SpeechModule, preferred: string): Promise<string | undefined> {
+  try {
+    const res = await mod.ExpoSpeechRecognitionModule.getSupportedLocales({});
+    const all = [...(res?.installedLocales ?? []), ...(res?.locales ?? [])];
+    if (all.length === 0) return undefined;
+
+    const want = normaliseTag(preferred);
+    const exact = all.find((l) => normaliseTag(l) === want);
+    if (exact) return exact;
+
+    const prefix = want.split("-")[0];
+    const sameLanguage = all.find((l) => normaliseTag(l).startsWith(`${prefix}-`));
+    if (sameLanguage) return sameLanguage;
+
+    const english = all.find((l) => normaliseTag(l).startsWith("en"));
+    if (english) return english;
+
+    return undefined;
+  } catch {
+    // Throws on some devices/older APIs — fall back to the recogniser default.
+    return undefined;
+  }
+}
+
 type SpeechModule = typeof import("expo-speech-recognition");
 let cachedModule: SpeechModule | null = null;
 let moduleResolved = false;
@@ -88,6 +126,36 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
   const statusRef = useRef<VoiceStatus>("idle");
   useEffect(() => { statusRef.current = status; }, [status]);
 
+  // Guards a single automatic retry with no `lang` when the recogniser rejects
+  // the negotiated locale anyway. Without this, a rejection is a dead end.
+  const retriedWithoutLangRef = useRef(false);
+
+  /**
+   * Actually start the recogniser. Held in a ref so the error listener (which
+   * is subscribed once, on mount) can invoke the retry without re-subscribing.
+   */
+  const lastLocaleRef = useRef<string | undefined>(undefined);
+  const beginRef = useRef<(locale?: string) => void>(() => {});
+  beginRef.current = (locale?: string) => {
+    const mod = getSpeechModule();
+    if (!mod) return;
+    lastLocaleRef.current = locale;
+    try {
+      setStatus("listening");
+      mod.ExpoSpeechRecognitionModule.start({
+        // Omitted entirely when undefined — the recogniser then uses its default.
+        ...(locale ? { lang: locale } : {}),
+        interimResults: true,
+        continuous: false,
+        requiresOnDeviceRecognition: false,
+        addsPunctuation: false,
+      });
+    } catch {
+      setStatus("idle");
+      setError("Couldn't start voice input. Please type your request.");
+    }
+  };
+
   // ---- availability -------------------------------------------------------
   useEffect(() => {
     const mod = getSpeechModule();
@@ -127,6 +195,20 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
       addListener(mod, "error", (e) => {
         setPartial("");
         setStatus("idle");
+        // The negotiated locale can still be rejected (e.g. the language pack is
+        // listed but not usable). Retry once letting the recogniser pick, rather
+        // than telling the farmer to give up.
+        // Only worth retrying if we actually forced a locale; if we already let
+        // the recogniser choose, repeating the same call would change nothing.
+        if (
+          e?.error === "language-not-supported"
+          && lastLocaleRef.current !== undefined
+          && !retriedWithoutLangRef.current
+        ) {
+          retriedWithoutLangRef.current = true;
+          beginRef.current(undefined);
+          return;
+        }
         setError(describeError(e?.error));
       }),
       addListener(mod, "nomatch", () => {
@@ -211,19 +293,10 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
       return;
     }
 
-    try {
-      setStatus("listening");
-      mod.ExpoSpeechRecognitionModule.start({
-        lang: LOCALE[lang] ?? "en-IN",
-        interimResults: true,
-        continuous: false,
-        requiresOnDeviceRecognition: false,
-        addsPunctuation: false,
-      });
-    } catch {
-      setStatus("idle");
-      setError("Couldn't start voice input. Please type your request.");
-    }
+    const preferred = LOCALE[lang] ?? "en-IN";
+    const chosen = await pickSupportedLocale(mod, preferred);
+    retriedWithoutLangRef.current = false;
+    beginRef.current(chosen);
   }, [ensurePermission, lang, stop]);
 
   const clearError = useCallback(() => setError(null), []);
@@ -250,7 +323,9 @@ function describeError(code?: string): string | null {
     case "audio-capture":
       return "Microphone unavailable. Please type instead.";
     case "language-not-supported":
-      return "That language isn't supported for voice here — please type.";
+      // Only reached after the no-locale retry also failed, i.e. the device has
+      // no usable speech language pack at all.
+      return "No speech language is installed on this device. Install one in Android Settings → Google → Voice, or just type.";
     default:
       return "Voice input failed — please type your request.";
   }
