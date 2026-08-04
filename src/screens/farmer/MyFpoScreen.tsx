@@ -11,7 +11,7 @@ import {
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import {
-  Badge, Button, Card, CardContent, CardHeader, CardTitle, Field, Input,
+  Button, Card, CardContent, CardHeader, CardTitle, Field, Input,
   Muted, Select, Stat, Table, Text, toast,
 } from "../../components/ui";
 import { EmptyHint, Meta, SectionCard, SectionCardRow, Segmented } from "../../components/common";
@@ -298,24 +298,21 @@ function NearbyFpos() {
       <Text size="lg" weight="700">Nearby FPOs recommended for you</Text>
       {recommended.map((fpo, idx) => {
         const dist = 4 + idx * 6;
-        const uplift = Math.round(((fpo.avgPriceRealisation - fpo.apmcPrice) / fpo.apmcPrice) * 100);
         return (
           <Card key={fpo.id}>
             <CardContent style={{ paddingTop: spacing.lg }}>
-              <View style={{ flexDirection: "row", gap: spacing.sm }}>
-                <View style={{ flex: 1 }}>
-                  <Text size="sm" weight="700">{fpo.name}</Text>
-                  <Muted style={{ marginTop: 2 }}>{fpo.tagline}</Muted>
-                </View>
-                <Badge color={colors.farmer} bg={colors.farmerSoft}>{fpo.tier}</Badge>
+              {/* Tier badge and the "+X% vs APMC" stat were removed; the title
+                  now spans the full width and the meta list is a single column. */}
+              <Text size="base" weight="700">{fpo.name}</Text>
+              <Muted style={{ marginTop: 2 }}>{fpo.tagline}</Muted>
+
+              <View style={s.metaList}>
+                <Meta icon={<MapPin size={13} color={colors.mutedForeground} />} label={`${dist} km · ${fpo.block}, ${fpo.district}`} />
+                <Meta icon={<Users size={13} color={colors.mutedForeground} />} label={`${fpo.members} members`} />
+                <Meta icon={<Sprout size={13} color={colors.mutedForeground} />} label={fpo.commodities.join(", ")} />
               </View>
-              <View style={s.metaGrid}>
-                <Meta icon={<MapPin size={12} color={colors.mutedForeground} />} label={`${dist} km · ${fpo.block}, ${fpo.district}`} />
-                <Meta icon={<Users size={12} color={colors.mutedForeground} />} label={`${fpo.members} members`} />
-                <Meta icon={<Sprout size={12} color={colors.mutedForeground} />} label={fpo.commodities.join(", ")} />
-                <Meta icon={<TrendingUp size={12} color={colors.mutedForeground} />} label={`+${uplift}% vs APMC (₹${fpo.avgPriceRealisation}/q)`} />
-              </View>
-              <Button full accent={colors.farmer} onPress={() => setOpenFor(fpo.id)} style={{ marginTop: spacing.sm }}>
+
+              <Button full accent={colors.farmer} onPress={() => setOpenFor(fpo.id)} style={{ marginTop: spacing.md }}>
                 Apply for Membership
               </Button>
               {openFor === fpo.id && <ApplyForm fpoName={fpo.name} onDone={() => setOpenFor(null)} />}
@@ -377,7 +374,8 @@ const s = StyleSheet.create({
   dashed: { borderTopWidth: 1, borderStyle: "dashed", borderColor: colors.farmer + "66", marginVertical: spacing.sm },
   placard: { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, padding: spacing.md, backgroundColor: colors.background },
   statGrid: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
-  metaGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.md },
+  /** Single-column meta list — the 2x2 grid looked sparse once the stat was removed. */
+  metaList: { gap: 8, marginTop: spacing.md },
   inlineForm: {
     borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
     backgroundColor: colors.mutedBg, padding: spacing.md, marginTop: spacing.md,

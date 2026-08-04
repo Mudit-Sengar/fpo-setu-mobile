@@ -4,20 +4,29 @@ import { useIsFocused } from "@react-navigation/native";
 import { useApp } from "../lib/app-state";
 
 /**
- * Speech-to-text for Krishi Bandhu, built on expo-speech-recognition.
+ * Speech-to-text for Krishi Bandhu, on expo-speech-recognition.
  *
- * IMPORTANT: this is a native module, so it does not exist in Expo Go. The
- * import is therefore lazy and failure-tolerant — when the native side is
- * missing, `available` stays false, no listeners are attached, and the UI
- * silently falls back to typed input instead of crashing.
+ * WHY THIS IS NETWORK-FIRST
+ * -------------------------
+ * Android routes SpeechRecognizer to a recognition *service*. On Android 13+ the
+ * system prefers the ON-DEVICE recogniser (com.google.android.as), which only
+ * works for languages the user has explicitly downloaded. If that pack is
+ * missing it fails with ERROR_LANGUAGE_NOT_SUPPORTED — which is exactly what we
+ * hit, and it is not something we should ask farmers to fix in Settings.
  *
- * Status surfaced to the UI:
- *   idle       — ready, nothing happening
- *   listening  — mic open, capturing speech
- *   processing — final transcript captured, intent being resolved
+ * The fix is to force cloud recognition:
+ *   - androidIntentOptions.EXTRA_PREFER_OFFLINE = false  (never require a pack)
+ *   - target the network-capable Google service explicitly, not the on-device one
  *
- * Permission outcomes are distinguished so the UI can react correctly:
- *   granted | denied (can ask again) | blocked (needs Settings) | unavailable
+ * Cloud recognition needs no downloaded language pack and supports far more
+ * languages, including hi-IN and mr-IN. The only user-facing requirement is
+ * microphone permission, plus a network connection.
+ *
+ * We then try a small ladder of attempts (see buildAttempts) so a single
+ * unsupported combination never dead-ends the farmer.
+ *
+ * The native module is lazily required and failure-tolerant, so Expo Go (where
+ * it does not exist) degrades to typed input instead of crashing.
  */
 
 export type VoiceStatus = "idle" | "listening" | "processing";
@@ -25,49 +34,14 @@ export type PermissionOutcome = "granted" | "denied" | "blocked" | "unavailable"
 
 const LOCALE: Record<string, string> = { en: "en-IN", hi: "hi-IN", mr: "mr-IN" };
 
-const normaliseTag = (s: string) => s.replace(/_/g, "-").toLowerCase();
-
-/**
- * Choose a locale the device's recogniser actually supports.
- *
- * Forcing a hardcoded tag (e.g. "mr-IN") fails with `language-not-supported`
- * on devices where that language pack isn't installed. Preference order:
- *   exact match -> same language, any region -> any English -> undefined.
- *
- * `undefined` is a valid, useful answer: `lang` is optional in the start
- * options, and omitting it lets the recogniser use its own default. That is
- * also the right behaviour on Android <= 12, where getSupportedLocales()
- * always returns an empty list.
- */
-async function pickSupportedLocale(mod: SpeechModule, preferred: string): Promise<string | undefined> {
-  try {
-    const res = await mod.ExpoSpeechRecognitionModule.getSupportedLocales({});
-    const all = [...(res?.installedLocales ?? []), ...(res?.locales ?? [])];
-    if (all.length === 0) return undefined;
-
-    const want = normaliseTag(preferred);
-    const exact = all.find((l) => normaliseTag(l) === want);
-    if (exact) return exact;
-
-    const prefix = want.split("-")[0];
-    const sameLanguage = all.find((l) => normaliseTag(l).startsWith(`${prefix}-`));
-    if (sameLanguage) return sameLanguage;
-
-    const english = all.find((l) => normaliseTag(l).startsWith("en"));
-    if (english) return english;
-
-    return undefined;
-  } catch {
-    // Throws on some devices/older APIs — fall back to the recogniser default.
-    return undefined;
-  }
-}
+/** Google's network-capable recogniser. `com.google.android.as` is on-device only. */
+const NETWORK_SERVICE = "com.google.android.googlequicksearchbox";
+const ON_DEVICE_SERVICE = "com.google.android.as";
 
 type SpeechModule = typeof import("expo-speech-recognition");
 let cachedModule: SpeechModule | null = null;
 let moduleResolved = false;
 
-/** Resolve the native module once; null when it isn't in the binary (Expo Go). */
 function getSpeechModule(): SpeechModule | null {
   if (!moduleResolved) {
     moduleResolved = true;
@@ -80,12 +54,6 @@ function getSpeechModule(): SpeechModule | null {
   return cachedModule;
 }
 
-/**
- * The module's public typings expose `useSpeechRecognitionEvent` rather than
- * `addListener`, but the underlying native module is an EventEmitter and
- * `addListener` exists at runtime. We attach imperatively (not via the hook) so
- * the whole integration can stay behind the lazy require above.
- */
 type Subscription = { remove: () => void };
 function addListener(mod: SpeechModule, event: string, cb: (e: any) => void): Subscription | null {
   const emitter = mod.ExpoSpeechRecognitionModule as unknown as {
@@ -98,13 +66,78 @@ function addListener(mod: SpeechModule, event: string, cb: (e: any) => void): Su
   }
 }
 
+const normaliseTag = (s: string) => s.replace(/_/g, "-").toLowerCase();
+
+/** Pick a locale the recogniser lists, else undefined (recogniser default). */
+async function pickSupportedLocale(mod: SpeechModule, preferred: string): Promise<string | undefined> {
+  try {
+    const res = await mod.ExpoSpeechRecognitionModule.getSupportedLocales({});
+    const all = [...(res?.installedLocales ?? []), ...(res?.locales ?? [])];
+    // Empty on Android <= 12 — not a signal that nothing is supported.
+    if (all.length === 0) return undefined;
+
+    const want = normaliseTag(preferred);
+    const exact = all.find((l) => normaliseTag(l) === want);
+    if (exact) return exact;
+
+    const prefix = want.split("-")[0];
+    const sameLanguage = all.find((l) => normaliseTag(l).startsWith(`${prefix}-`));
+    if (sameLanguage) return sameLanguage;
+
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Which recognition service to ask for; undefined = system default. */
+function pickService(mod: SpeechModule): string | undefined {
+  if (Platform.OS !== "android") return undefined;
+  try {
+    const services = mod.ExpoSpeechRecognitionModule.getSpeechRecognitionServices() ?? [];
+    if (services.includes(NETWORK_SERVICE)) return NETWORK_SERVICE;
+    const fallback = mod.ExpoSpeechRecognitionModule.getDefaultRecognitionService?.()?.packageName;
+    // Never deliberately choose the on-device-only service: that is the thing
+    // that requires a downloaded language pack.
+    if (fallback && fallback !== ON_DEVICE_SERVICE) return fallback;
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+interface Attempt {
+  locale?: string;
+  service?: string;
+}
+
+/**
+ * Ordered fallbacks. Every attempt forces EXTRA_PREFER_OFFLINE=false, so none of
+ * them require a downloaded language pack.
+ */
+function buildAttempts(locale: string | undefined, service: string | undefined): Attempt[] {
+  const list: Attempt[] = [];
+  if (service && locale) list.push({ locale, service });
+  if (service) list.push({ service });
+  if (locale) list.push({ locale });
+  list.push({});                       // system default, recogniser picks language
+  // De-duplicate structurally identical attempts.
+  const seen = new Set<string>();
+  return list.filter((a) => {
+    const k = `${a.locale ?? ""}|${a.service ?? ""}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+/** Errors worth trying the next configuration for. */
+const RETRYABLE = new Set(["language-not-supported", "service-not-allowed", "client"]);
+
 export interface UseVoiceInput {
   status: VoiceStatus;
-  /** False in Expo Go, or when the device has no speech recogniser installed. */
   available: boolean;
-  /** Live partial transcript while listening; "" otherwise. */
   partial: string;
-  /** User-facing error message, or null. */
   error: string | null;
   start: () => Promise<void>;
   stop: () => void;
@@ -119,36 +152,41 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
   const [partial, setPartial] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  // Latest callback without re-subscribing native listeners.
   const onResultRef = useRef(onResult);
   useEffect(() => { onResultRef.current = onResult; }, [onResult]);
 
   const statusRef = useRef<VoiceStatus>("idle");
   useEffect(() => { statusRef.current = status; }, [status]);
 
-  // Guards a single automatic retry with no `lang` when the recogniser rejects
-  // the negotiated locale anyway. Without this, a rejection is a dead end.
-  const retriedWithoutLangRef = useRef(false);
+  const attemptsRef = useRef<Attempt[]>([]);
+  const attemptIdxRef = useRef(0);
 
-  /**
-   * Actually start the recogniser. Held in a ref so the error listener (which
-   * is subscribed once, on mount) can invoke the retry without re-subscribing.
-   */
-  const lastLocaleRef = useRef<string | undefined>(undefined);
-  const beginRef = useRef<(locale?: string) => void>(() => {});
-  beginRef.current = (locale?: string) => {
+  /** Run one attempt. Held in a ref so the once-mounted error listener can advance. */
+  const runAttemptRef = useRef<(index: number) => void>(() => {});
+  runAttemptRef.current = (index: number) => {
     const mod = getSpeechModule();
     if (!mod) return;
-    lastLocaleRef.current = locale;
+    const attempt = attemptsRef.current[index];
+    if (!attempt) {
+      setStatus("idle");
+      setError("Voice isn't working on this device right now — please type instead.");
+      return;
+    }
+    attemptIdxRef.current = index;
     try {
       setStatus("listening");
       mod.ExpoSpeechRecognitionModule.start({
-        // Omitted entirely when undefined — the recogniser then uses its default.
-        ...(locale ? { lang: locale } : {}),
+        ...(attempt.locale ? { lang: attempt.locale } : {}),
+        ...(attempt.service ? { androidRecognitionServicePackage: attempt.service } : {}),
         interimResults: true,
         continuous: false,
+        // Cloud recognition: no downloaded language pack required.
         requiresOnDeviceRecognition: false,
         addsPunctuation: false,
+        androidIntentOptions: {
+          EXTRA_PREFER_OFFLINE: false,
+          EXTRA_LANGUAGE_MODEL: "free_form",
+        },
       });
     } catch {
       setStatus("idle");
@@ -162,8 +200,6 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
     if (!mod) { setAvailable(false); return; }
     try {
       const recognisable = mod.ExpoSpeechRecognitionModule.isRecognitionAvailable();
-      // Android 11+: with no matching <queries> entry, or no Google app, the
-      // services list is empty and starting would fail.
       const services = Platform.OS === "android"
         ? mod.ExpoSpeechRecognitionModule.getSpeechRecognitionServices()
         : ["ios"];
@@ -186,7 +222,6 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
           setStatus("processing");
           const text = transcript.trim();
           if (text.length > 0) onResultRef.current(text);
-          // Short, perceivable processing state before returning to idle.
           setTimeout(() => setStatus("idle"), 250);
         } else {
           setPartial(transcript);
@@ -194,22 +229,15 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
       }),
       addListener(mod, "error", (e) => {
         setPartial("");
-        setStatus("idle");
-        // The negotiated locale can still be rejected (e.g. the language pack is
-        // listed but not usable). Retry once letting the recogniser pick, rather
-        // than telling the farmer to give up.
-        // Only worth retrying if we actually forced a locale; if we already let
-        // the recogniser choose, repeating the same call would change nothing.
-        if (
-          e?.error === "language-not-supported"
-          && lastLocaleRef.current !== undefined
-          && !retriedWithoutLangRef.current
-        ) {
-          retriedWithoutLangRef.current = true;
-          beginRef.current(undefined);
+        const code: string | undefined = e?.error;
+
+        // Try the next configuration before giving up on the farmer.
+        if (code && RETRYABLE.has(code) && attemptIdxRef.current + 1 < attemptsRef.current.length) {
+          runAttemptRef.current(attemptIdxRef.current + 1);
           return;
         }
-        setError(describeError(e?.error));
+        setStatus("idle");
+        setError(describeError(code));
       }),
       addListener(mod, "nomatch", () => {
         setPartial("");
@@ -218,7 +246,6 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
       }),
       addListener(mod, "end", () => {
         setPartial("");
-        // Only reset when no final result arrived (that path sets "processing").
         if (statusRef.current === "listening") setStatus("idle");
       }),
     ];
@@ -235,13 +262,12 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
     setStatus("idle");
   }, []);
 
-  // ---- stop cleanly when leaving the screen -------------------------------
+  // ---- lifecycle ----------------------------------------------------------
   useEffect(() => {
     if (!isFocused && statusRef.current !== "idle") stop();
   }, [isFocused, stop]);
 
   useEffect(() => () => {
-    // Unmount: abort rather than stop, so no trailing result fires into a dead screen.
     const mod = getSpeechModule();
     try { mod?.ExpoSpeechRecognitionModule.abort(); } catch { /* not running */ }
   }, []);
@@ -253,7 +279,6 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
     try {
       const current = await mod.ExpoSpeechRecognitionModule.getPermissionsAsync();
       if (current.granted) return "granted";
-      // Already permanently denied — asking again shows nothing.
       if (!current.canAskAgain) return "blocked";
       const asked = await mod.ExpoSpeechRecognitionModule.requestPermissionsAsync();
       if (asked.granted) return "granted";
@@ -268,14 +293,10 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
 
     const mod = getSpeechModule();
     if (!mod) {
-      // Reached in Expo Go, and also in any native build where Gradle did not
-      // compile the module (autolinking runs at configure time, so a stale
-      // Gradle sync silently omits it — do a Gradle sync + clean rebuild).
       setError("Voice isn't available in this build — please type instead.");
       return;
     }
 
-    // Tap while listening = stop.
     if (statusRef.current === "listening") { stop(); return; }
 
     const outcome = await ensurePermission();
@@ -294,9 +315,9 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
     }
 
     const preferred = LOCALE[lang] ?? "en-IN";
-    const chosen = await pickSupportedLocale(mod, preferred);
-    retriedWithoutLangRef.current = false;
-    beginRef.current(chosen);
+    const [locale, service] = [await pickSupportedLocale(mod, preferred), pickService(mod)];
+    attemptsRef.current = buildAttempts(locale, service);
+    runAttemptRef.current(0);
   }, [ensurePermission, lang, stop]);
 
   const clearError = useCallback(() => setError(null), []);
@@ -305,8 +326,9 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
 }
 
 /**
- * Map recogniser error codes onto something a farmer can act on.
- * Returns null for user-initiated cancellation, which isn't an error.
+ * Farmer-facing messages. Deliberately never surfaces raw Android error codes.
+ * Language-pack errors are absent by design: every attempt forces cloud
+ * recognition, so a missing on-device pack can no longer be the cause.
  */
 function describeError(code?: string): string | null {
   switch (code) {
@@ -315,18 +337,15 @@ function describeError(code?: string): string | null {
     case "no-speech":
       return "Didn't catch that — tap the mic and try again.";
     case "not-allowed":
-    case "service-not-allowed":
       return "Microphone access was refused. You can still type.";
     case "network":
     case "network-timeout":
-      return "Voice needs a network connection. Please type instead.";
+      return "Voice needs an internet connection. Please check your network or type instead.";
     case "audio-capture":
-      return "Microphone unavailable. Please type instead.";
-    case "language-not-supported":
-      // Only reached after the no-locale retry also failed, i.e. the device has
-      // no usable speech language pack at all.
-      return "No speech language is installed on this device. Install one in Android Settings → Google → Voice, or just type.";
+      return "Microphone is busy or unavailable. Please type instead.";
+    case "busy":
+      return "Voice is still starting up — tap the mic again in a moment.";
     default:
-      return "Voice input failed — please type your request.";
+      return "Voice didn't work that time — please try again or type.";
   }
 }
