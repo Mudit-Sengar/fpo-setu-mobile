@@ -2,9 +2,10 @@ import React, { useState } from "react";
 import { Linking, StyleSheet, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { ExternalLink, Info, Landmark } from "lucide-react-native";
-import {
-  farmerSchemeDescription, farmerSchemeUrl, farmerSchemes, type FarmerScheme,
-} from "../../lib/mockData";
+import { farmerSchemeDescription } from "../../lib/mockData";
+import { contentRepo } from "../../db";
+import { useDbQuery } from "../../db/useDbQuery";
+import type { FarmerScheme } from "../../db/types";
 import { colors, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import { Badge, Button, Card, CardContent, Muted, Text, toast } from "../../components/ui";
@@ -25,11 +26,14 @@ export function SchemesScreen() {
   const goBack = useFarmerBack();
   const [filter, setFilter] = useState<Filter>("all");
 
-  const list = filter === "all" ? farmerSchemes() : farmerSchemes(filter);
+  const [list] = useDbQuery<FarmerScheme[]>(
+    () => contentRepo.listFarmerSchemes(filter === "all" ? undefined : filter),
+    [filter], [],
+  );
 
   // "Know More" and "Apply" currently resolve to the same official portal.
   async function openScheme(scheme: FarmerScheme) {
-    const url = farmerSchemeUrl(scheme);
+    const url = await contentRepo.getFarmerSchemeUrl(scheme.name);
     if (!url) {
       toast.error("No portal link available for this scheme.");
       return;

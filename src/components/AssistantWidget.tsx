@@ -4,10 +4,18 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MessageCircle, Mic, MicOff, Send, Volume2, X } from "lucide-react-native";
 import { useApp, type Role } from "../lib/app-state";
 import { useSpeech } from "../hooks/useSpeech";
-import { colors, radius, spacing } from "../theme";
+import { accentColors, colors, radius, spacing, type Accent } from "../theme";
 import { Input, Text } from "./ui";
 
 interface Msg { role: "user" | "bot"; text: string }
+
+/**
+ * FAB geometry. Exported because the FAB floats above RoleShell's ScrollView, so
+ * the shell has to pad its content past it — otherwise the last card on every
+ * screen sits permanently under the button once scrolled to the bottom.
+ */
+export const FAB_SIZE = 54;
+export const FAB_BOTTOM_OFFSET = 74;
 
 /**
  * Ported from the web app's AssistantWidget.tsx.
@@ -16,10 +24,19 @@ interface Msg { role: "user" | "bot"; text: string }
  * `useLocation().pathname`; here the equivalent is the current screen name, passed
  * in by RoleShell.
  */
-export function AssistantWidget({ screenName = "Home" }: { screenName?: string }) {
+export function AssistantWidget({
+  screenName = "Home",
+  accent,
+}: {
+  screenName?: string;
+  /** Role accent, supplied by RoleShell. Without it the widget would render the
+   *  FPO red on every role — visibly wrong in the teal Buyer view. */
+  accent?: Accent;
+}) {
   const { role } = useApp();
   const { speak, startListening, listening } = useSpeech();
   const insets = useSafeAreaInsets();
+  const accentColor = accent ? accentColors[accent].base : colors.primary;
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const scrollRef = useRef<ScrollView | null>(null);
@@ -83,7 +100,7 @@ export function AssistantWidget({ screenName = "Home" }: { screenName?: string }
       tips.push("Tap the mic to dictate questions; tap the speaker icon on any reply to listen.");
     }
     if (q.includes("switch") || q.includes("logout") || q.includes("role")) {
-      tips.push("Use 'Switch Role' in the top bar to return to the Login screen and pick a different role.");
+      tips.push("Use 'Logout' in the top bar to return to the Login screen and pick a different role.");
     }
 
     if (tips.length === 0) {
@@ -109,7 +126,7 @@ export function AssistantWidget({ screenName = "Home" }: { screenName?: string }
     <>
       <Pressable
         onPress={() => setOpen(true)}
-        style={[s.fab, { bottom: insets.bottom + 74 }]}
+        style={[s.fab, { bottom: insets.bottom + FAB_BOTTOM_OFFSET, backgroundColor: accentColor }]}
         accessibilityLabel="Open FPO Setu Assistant"
       >
         <MessageCircle size={24} color="#ffffff" />
@@ -118,7 +135,7 @@ export function AssistantWidget({ screenName = "Home" }: { screenName?: string }
       <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
         <View style={s.backdrop}>
           <View style={[s.panel, { marginBottom: insets.bottom + 12, marginTop: insets.top + 40 }]}>
-            <View style={s.header}>
+            <View style={[s.header, { backgroundColor: accentColor }]}>
               <View style={{ flex: 1 }}>
                 <Text size="sm" weight="700" color="#ffffff">FPO Setu Assistant</Text>
                 <Text size="xxs" color="rgba(255,255,255,0.9)">
@@ -133,7 +150,10 @@ export function AssistantWidget({ screenName = "Home" }: { screenName?: string }
             <ScrollView ref={scrollRef} style={s.log} contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}>
               {msgs.map((m, i) => (
                 <View key={i} style={{ alignItems: m.role === "user" ? "flex-end" : "flex-start" }}>
-                  <View style={[s.bubble, m.role === "user" ? s.bubbleUser : s.bubbleBot]}>
+                  <View style={[
+                    s.bubble,
+                    m.role === "user" ? { backgroundColor: accentColor } : s.bubbleBot,
+                  ]}>
                     <Text size="sm" color={m.role === "user" ? "#ffffff" : colors.foreground} noTranslate>
                       {m.text}
                     </Text>
@@ -151,17 +171,21 @@ export function AssistantWidget({ screenName = "Home" }: { screenName?: string }
             <View style={s.composer}>
               <Pressable
                 onPress={startListening}
-                style={[s.iconBtn, listening && { backgroundColor: colors.primary, borderColor: colors.primary }]}
+                style={[s.iconBtn, listening && { backgroundColor: accentColor, borderColor: accentColor }]}
                 accessibilityLabel="Voice input"
               >
                 {listening
                   ? <MicOff size={16} color="#ffffff" />
-                  : <Mic size={16} color={colors.primary} />}
+                  : <Mic size={16} color={accentColor} />}
               </Pressable>
               <View style={{ flex: 1 }}>
                 <Input value={input} onChangeText={setInput} placeholder="Ask me anything about the app" />
               </View>
-              <Pressable onPress={() => send()} style={[s.iconBtn, s.sendBtn]} accessibilityLabel="Send">
+              <Pressable
+                onPress={() => send()}
+                style={[s.iconBtn, { backgroundColor: accentColor, borderColor: accentColor }]}
+                accessibilityLabel="Send"
+              >
                 <Send size={16} color="#ffffff" />
               </Pressable>
             </View>
@@ -176,10 +200,9 @@ const s = StyleSheet.create({
   fab: {
     position: "absolute",
     right: spacing.lg,
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: colors.primary,
+    width: FAB_SIZE,
+    height: FAB_SIZE,
+    borderRadius: FAB_SIZE / 2,
     alignItems: "center",
     justifyContent: "center",
     elevation: 6,
@@ -201,13 +224,11 @@ const s = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    backgroundColor: colors.primary,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
   },
   log: { flex: 1, backgroundColor: colors.mutedBg },
   bubble: { maxWidth: "88%", borderRadius: radius.lg, paddingHorizontal: 12, paddingVertical: 9 },
-  bubbleUser: { backgroundColor: colors.primary },
   bubbleBot: { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border },
   listen: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 5 },
   composer: {
@@ -224,5 +245,4 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
     alignItems: "center", justifyContent: "center",
   },
-  sendBtn: { backgroundColor: colors.primary, borderColor: colors.primary },
 });

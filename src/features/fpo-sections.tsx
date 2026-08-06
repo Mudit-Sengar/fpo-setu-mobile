@@ -1,41 +1,51 @@
 // Reusable FPO content sections — ported from the web app's
 // src/components/fpo-sections.tsx. Each export renders the content for one chip;
 // the parent screen shows the chips and renders the chosen section.
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { StyleSheet, View, useWindowDimensions } from "react-native";
 import {
   AlertTriangle, Banknote, BookOpenCheck, Building2, CalendarDays, CheckCircle2,
-  ChevronRight, FileCheck, Handshake, LandPlot, Landmark, Mail,
-  MessageCircle, Package, Phone, Plus, Send, ShieldCheck, Sparkles, Star, Target,
-  Truck, Users, Users2, Volume2, XCircle,
+  ChevronRight, FileCheck, GraduationCap, Handshake, LandPlot, Landmark, Mail,
+  MessageCircle, Package, Phone, Plus, Send, ShieldCheck, Sparkles, Sprout, Star, Target,
+  TrendingUp, Truck, Users, Users2, Volume2, XCircle,
 } from "lucide-react-native";
 import { useApp } from "../lib/app-state";
-import {
-  COMPLIANCE_EXPLAINER, COMPLIANCE_PARTNERS, EXPERTS, FPOS, FPO_MEETINGS,
-  GOVT_SCHEMES, INPUT_NEEDS, LEDGER, LENDERS, LOGISTICS_PROVIDERS, MEMBER_ENGAGEMENT,
-  MENTORS, MGMT_COURSES, SELLER_FEEDBACK, SUPPLIERS, TIER_SCORES, VALUE_COURSES,
-  buyersByCategory, cumulativeFor, fpoById, isSchemeEligible, tierOpportunities,
-  type FpoMeeting, type FPOSupply, type InputNeed, type LedgerEntry, type OpportunityDetail,
-} from "../lib/mockData";
+import { isSchemeEligible } from "../lib/mockData";
+import { contentRepo, fpoRepo, marketRepo } from "../db";
+import { useDbQuery } from "../db/useDbQuery";
+import type {
+  FPO, FpoCumulative, FpoMeeting, FPOSupply, InputNeed, LedgerEntry, MemberEngagement,
+  OpportunityDetail, Scheme, Supplier,
+} from "../db/types";
 import { useSpeech } from "../hooks/useSpeech";
 import { colors, radius, spacing } from "../theme";
 import {
-  Badge, Button, Card, CardContent, CardHeader, CardTitle, Checkbox, Chip, ChipRow,
+  Badge, Button, Card, CardContent, CardHeader, CardTitle, Checkbox,
   Dialog, Field, Gauge, Input, Muted, Progress, Select, Table, Text, toast,
 } from "../components/ui";
-import { CourseCard, EmptyHint, Segmented } from "../components/common";
+import { CourseCard, EmptyHint, SectionCard, SectionCardRow, Segmented } from "../components/common";
 import { BarChart } from "../components/charts";
 import { MarketLinkedGrowthPlanning, Kv } from "./market-readiness";
 
 const inr = (n: number) => n.toLocaleString("en-IN");
 
+/** The active FPO, loaded from SQLite. `null` until the first read resolves. */
+function useActiveFpo(): { fpoId: string; fpo: FPO | null } {
+  const { activeFpoId } = useApp();
+  const [fpo] = useDbQuery<FPO | null>(
+    () => fpoRepo.getFpoById(activeFpoId),
+    [activeFpoId],
+    null,
+  );
+  return { fpoId: activeFpoId, fpo };
+}
+
 /* ========= MANAGE & GROW ========= */
 
 export function PostRequestSection() {
-  const { activeFpoId } = useApp();
-  const fpo = fpoById(activeFpoId) ?? FPOS[0];
-  const [supply, setSupply] = useState<FPOSupply[]>(fpo.supply);
-  const [needs, setNeeds] = useState<InputNeed[]>(INPUT_NEEDS);
+  const { fpoId } = useActiveFpo();
+  const [supply, reloadSupply] = useDbQuery<FPOSupply[]>(() => fpoRepo.listSupply(fpoId), [fpoId], []);
+  const [needs, reloadNeeds] = useDbQuery<InputNeed[]>(() => fpoRepo.listInputNeeds(fpoId), [fpoId], []);
 
   return (
     <>
@@ -55,7 +65,11 @@ export function PostRequestSection() {
             ]}
             rows={supply.map((x) => ({ commodity: x.commodity, grade: x.grade, qty: String(x.qty_mt), window: x.harvest_window }))}
           />
-          <AddCommodityForm onAdd={(x) => { setSupply((p) => [...p, x]); toast.success(`${x.commodity} added.`); }} />
+          <AddCommodityForm onAdd={async (x) => {
+            await fpoRepo.insertSupply(fpoId, x);
+            reloadSupply();
+            toast.success(`${x.commodity} added.`);
+          }} />
         </CardContent>
       </Card>
 
@@ -78,7 +92,11 @@ export function PostRequestSection() {
             ]}
             rows={needs.map((n) => ({ item: n.item, category: n.category, qty: n.qty, window: n.window, notes: n.notes ?? "—" }))}
           />
-          <AddNeedForm onAdd={(n) => { setNeeds((p) => [...p, n]); toast.success(`${n.item} added to inputs needed.`); }} />
+          <AddNeedForm onAdd={async (n) => {
+            await fpoRepo.insertInputNeed(fpoId, n);
+            reloadNeeds();
+            toast.success(`${n.item} added to inputs needed.`);
+          }} />
         </CardContent>
       </Card>
     </>
@@ -86,9 +104,12 @@ export function PostRequestSection() {
 }
 
 export function MeetingSection() {
-  const { activeFpoId } = useApp();
-  const cum = cumulativeFor(activeFpoId);
-  const [meetings, setMeetings] = useState<FpoMeeting[]>(FPO_MEETINGS);
+  const { fpoId } = useActiveFpo();
+  const [cum] = useDbQuery<FpoCumulative>(
+    () => fpoRepo.cumulativeFor(fpoId), [fpoId],
+    { totalMembers: 0, totalLandAcres: 0, cropwise: [] },
+  );
+  const [meetings, reloadMeetings] = useDbQuery<FpoMeeting[]>(() => fpoRepo.listMeetings(fpoId), [fpoId], []);
 
   return (
     <Card>
@@ -106,23 +127,25 @@ export function MeetingSection() {
           ]}
           rows={meetings.map((m) => ({ date: m.date, time: m.time, agenda: m.agenda, venue: m.venue }))}
         />
-        <AddMeetingForm onAdd={(m) => setMeetings((p) => [m, ...p])} memberCount={cum.totalMembers} />
+        <AddMeetingForm
+          onAdd={async (m) => { await fpoRepo.insertMeeting(fpoId, m); reloadMeetings(); }}
+          memberCount={cum.totalMembers}
+        />
       </CardContent>
     </Card>
   );
 }
 
 export function BookkeepingSection() {
-  const { activeFpoId } = useApp();
-  const fpo = fpoById(activeFpoId) ?? FPOS[0];
-  const [ledger, setLedger] = useState<LedgerEntry[]>(LEDGER);
+  const { fpoId, fpo } = useActiveFpo();
+  const [ledger, reloadLedger] = useDbQuery<LedgerEntry[]>(() => fpoRepo.listLedger(fpoId), [fpoId], []);
 
   return (
     <Card>
       <CardHeader>
         <TitleWithIcon icon={<BookOpenCheck size={16} color={colors.fpo} />} title="Digital bookkeeping" />
         <View style={{ marginTop: spacing.sm }}>
-          <Gauge value={fpo.complianceScore} label="Compliance health" />
+          <Gauge value={fpo?.complianceScore ?? 0} label="Compliance health" />
         </View>
       </CardHeader>
       <CardContent>
@@ -156,8 +179,12 @@ export function BookkeepingSection() {
           Buyer/Seller IDs link transactions across the app — e.g. MH-AH-2024-00831 appears in farmer Suresh Patil&apos;s transaction history.
         </Muted>
         <AddEntry
-          onAdd={(entry) => { setLedger((p) => [...p, entry]); toast.success("Ledger entry added."); }}
-          running={ledger[ledger.length - 1].balance}
+          onAdd={async (entry) => {
+            await fpoRepo.insertLedgerEntry(fpoId, entry);
+            reloadLedger();
+            toast.success("Ledger entry added.");
+          }}
+          running={ledger.length > 0 ? ledger[ledger.length - 1].balance : 0}
         />
       </CardContent>
     </Card>
@@ -168,29 +195,47 @@ export function ExpansionPlannerSection() {
   const [tab, setTab] = useState<"sizing" | "growth">("sizing");
   return (
     <>
-      <Segmented
-        options={["sizing", "growth"] as const}
-        value={tab}
-        onChange={setTab}
-        accent={colors.fpo}
-        labelOf={(v) => (v === "sizing" ? "Opportunity Sizing" : "Market-Linked Growth Planning")}
-      />
+      {/* SectionCards rather than a Segmented pill switch: these are the two headline
+          tools of this screen and need the visual weight, and it matches the selector
+          pattern used on the FPO tab screens themselves. */}
+      <SectionCardRow>
+        <SectionCard
+          title="Opportunity Sizing"
+          accent={colors.fpo}
+          active={tab === "sizing"}
+          onPress={() => setTab("sizing")}
+          icon={<Target size={22} color={tab === "sizing" ? "#fff" : colors.fpo} />}
+        />
+        <SectionCard
+          title="Market-Linked Growth Planning"
+          accent={colors.fpo}
+          active={tab === "growth"}
+          onPress={() => setTab("growth")}
+          icon={<TrendingUp size={22} color={tab === "growth" ? "#fff" : colors.fpo} />}
+        />
+      </SectionCardRow>
       {tab === "sizing" ? <OpportunitySizingPanel /> : <MarketLinkedGrowthPlanning />}
     </>
   );
 }
 
 function OpportunitySizingPanel() {
-  const { activeFpoId } = useApp();
   const { speak } = useSpeech();
-  const fpo = fpoById(activeFpoId) ?? FPOS[0];
-  const scores = TIER_SCORES[fpo.tier];
-  const opportunities = tierOpportunities(fpo.tier);
+  const { fpo } = useActiveFpo();
+  const tier = fpo?.tier ?? "Tier 3";
+  const [scores] = useDbQuery<Record<string, number>>(
+    () => fpoRepo.getTierScores(tier), [tier],
+    { financial: 0, operational: 0, infra: 0, governance: 0, market: 0 },
+  );
+  const [opportunities] = useDbQuery<OpportunityDetail[]>(
+    () => fpoRepo.getTierOpportunities(tier), [tier], [],
+  );
+  const [mentors] = useDbQuery(() => contentRepo.listMentors(), [], []);
   const [openOpp, setOpenOpp] = useState<OpportunityDetail | null>(null);
   const [openMentor, setOpenMentor] = useState<string | null>(null);
   const [mentorMsg, setMentorMsg] = useState("");
 
-  const mentor = MENTORS.find((x) => x.name === openMentor);
+  const mentor = mentors.find((x) => x.name === openMentor);
 
   return (
     <Card>
@@ -205,7 +250,7 @@ function OpportunitySizingPanel() {
       </CardHeader>
       <CardContent>
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.sm }}>
-          <Badge color={colors.fpoForeground} bg={colors.fpo}>{fpo.tier}</Badge>
+          <Badge color={colors.fpoForeground} bg={colors.fpo}>{tier}</Badge>
           <Muted>5 dimensions</Muted>
         </View>
 
@@ -273,7 +318,7 @@ function OpportunitySizingPanel() {
             </Button>
 
             <Text size="sm" weight="700" style={{ marginTop: spacing.sm }}>Scrutinise with an Expert</Text>
-            {MENTORS.map((m) => (
+            {mentors.map((m) => (
               <View key={m.name} style={s.mentorCard}>
                 <Text size="sm" weight="700">{m.name}</Text>
                 <Muted>{m.expertise}</Muted>
@@ -311,15 +356,15 @@ function OpportunitySizingPanel() {
 /* ========= FIND PARTNERS ========= */
 
 export function LocateBuyerSection() {
-  const { activeFpoId } = useApp();
-  const fpo = fpoById(activeFpoId) ?? FPOS[0];
-  const groups = buyersByCategory();
+  const { fpo } = useActiveFpo();
+  const [groups] = useDbQuery(() => marketRepo.buyersByCategory(), [], {});
   const score = (i: number) => 92 - i * 6;
+  const fpoCommodities = fpo?.commodities ?? [];
 
   return (
     <>
       {(["Spot", "Relationship", "Development"] as const).map((cat) => {
-        const list = groups[cat].filter((b) => b.commodities.some((c) => fpo.commodities.includes(c)));
+        const list = (groups[cat] ?? []).filter((b) => b.commodities.some((c) => fpoCommodities.includes(c)));
         if (list.length === 0) return null;
         return (
           <Card key={cat}>
@@ -344,7 +389,7 @@ export function LocateBuyerSection() {
                   </View>
                   <Muted style={{ marginTop: spacing.sm }}>
                     {"Commodity: "}
-                    <Text size="xs">{b.commodities.find((c) => fpo.commodities.includes(c)) ?? b.commodities[0]}</Text>
+                    <Text size="xs">{b.commodities.find((c) => fpoCommodities.includes(c)) ?? b.commodities[0]}</Text>
                     {" · Volume: "}
                     <Text size="xs">{`${b.typicalVolumeMT} MT/yr`}</Text>
                   </Muted>
@@ -363,13 +408,14 @@ export function LocateBuyerSection() {
 }
 
 export function LocateSupplierSection() {
+  const [suppliers] = useDbQuery<Supplier[]>(() => marketRepo.listSuppliers(), [], []);
   return (
     <Card>
       <CardHeader>
         <TitleWithIcon icon={<Package size={16} color={colors.fpo} />} title="Matched input suppliers" />
       </CardHeader>
       <CardContent>
-        {SUPPLIERS.map((sup, i) => (
+        {suppliers.map((sup, i) => (
           <View key={sup.id} style={s.itemCard}>
             <View style={s.rowBetween}>
               <View style={{ flex: 1 }}>
@@ -396,13 +442,14 @@ export function LocateSupplierSection() {
 }
 
 export function LogisticsSection() {
+  const [providers] = useDbQuery(() => contentRepo.listLogisticsProviders(), [], []);
   return (
     <Card>
       <CardHeader>
         <TitleWithIcon icon={<Truck size={16} color={colors.fpo} />} title="Logistics service providers" />
       </CardHeader>
       <CardContent>
-        {LOGISTICS_PROVIDERS.map((p) => (
+        {providers.map((p) => (
           <View key={p.name} style={s.itemCard}>
             <Text size="sm" weight="700">{p.name}</Text>
             <Muted>{`${p.svc} · ${p.location}`}</Muted>
@@ -422,8 +469,8 @@ export function LogisticsSection() {
 }
 
 export function AccessCreditSection() {
-  const { activeFpoId } = useApp();
-  const fpo = fpoById(activeFpoId) ?? FPOS[0];
+  const { fpo } = useActiveFpo();
+  const [lenders] = useDbQuery(() => contentRepo.listLenders(), [], []);
   const [openProposal, setOpenProposal] = useState(false);
 
   return (
@@ -433,7 +480,7 @@ export function AccessCreditSection() {
           <TitleWithIcon icon={<Banknote size={16} color={colors.fpo} />} title="Credit Facilitation" />
         </CardHeader>
         <CardContent>
-          {LENDERS.map((l) => (
+          {lenders.map((l) => (
             <View key={l.name} style={s.itemCard}>
               <Text size="sm" weight="700">{l.name}</Text>
               <Muted>{l.product}</Muted>
@@ -459,11 +506,11 @@ export function AccessCreditSection() {
       </Card>
 
       <Dialog visible={openProposal} onClose={() => setOpenProposal(false)}
-        title={`Bankable Loan Proposal — ${fpo.name}`}>
+        title={`Bankable Loan Proposal — ${fpo?.name ?? ""}`}>
         <Kv k="Requested amount" v="₹48,00,000" />
         <Kv k="Purpose" v="Working capital for kharif aggregation" />
         <Kv k="Projected revenue uplift" v="₹1.6 Cr / season (+22%)" />
-        <Kv k="Compliance score" v={`${fpo.complianceScore}/100`} />
+        <Kv k="Compliance score" v={`${fpo?.complianceScore ?? 0}/100`} />
         <Kv k="Repayment" v="12 months · seasonal bullet" />
         <Button accent={colors.fpo}
           onPress={() => { toast.success("Proposal shared with NABARD & Samunnati."); setOpenProposal(false); }}>
@@ -475,29 +522,33 @@ export function AccessCreditSection() {
 }
 
 export function GovtSchemesSection() {
-  const { activeFpoId } = useApp();
-  const fpo = fpoById(activeFpoId) ?? FPOS[0];
+  const { fpo } = useActiveFpo();
+  const [allSchemes] = useDbQuery<Scheme[]>(() => contentRepo.listFpoSchemes(), [], []);
   const [body, setBody] = useState<"all" | "Central" | "State (Maharashtra)">("all");
-  const schemes = GOVT_SCHEMES.filter((x) => body === "all" || x.body === body);
+  const schemes = allSchemes.filter((x) => body === "all" || x.body === body);
 
   return (
-    <Card>
+    <>
+      {/* Filters sit above the card at full width with large touch targets, matching
+          the Farmer Government Schemes screen (src/screens/farmer/SchemesScreen.tsx). */}
+      <Segmented
+        options={["all", "Central", "State (Maharashtra)"] as const}
+        value={body}
+        onChange={setBody}
+        accent={colors.fpo}
+        size="lg"
+        labelOf={(b) => (b === "all" ? "All" : b === "Central" ? "Central" : "State")}
+      />
+
+      <Card>
       <CardHeader>
         <TitleWithIcon icon={<Landmark size={16} color={colors.fpo} />} title="Government Schemes" />
-        <View style={{ marginTop: spacing.sm, alignSelf: "flex-start" }}>
-          <Segmented
-            options={["all", "Central", "State (Maharashtra)"] as const}
-            value={body}
-            onChange={setBody}
-            accent={colors.fpo}
-            labelOf={(b) => (b === "all" ? "All" : b === "Central" ? "Central" : "State")}
-          />
-        </View>
       </CardHeader>
       <CardContent>
         {schemes.map((sch) => {
-          // Real business rule preserved from mockData.isSchemeEligible().
-          const eligible = isSchemeEligible(sch, fpo);
+          // Real business rule preserved from mockData.isSchemeEligible() — pure
+          // logic over the row data, so it stays in code rather than moving to SQL.
+          const eligible = fpo != null && isSchemeEligible(sch, fpo);
           return (
             <View key={sch.name} style={s.itemCard}>
               <View style={s.rowBetween}>
@@ -529,11 +580,14 @@ export function GovtSchemesSection() {
           );
         })}
       </CardContent>
-    </Card>
+      </Card>
+    </>
   );
 }
 
 export function ComplianceSection() {
+  const [explainer] = useDbQuery(() => contentRepo.listComplianceExplainer(), [], []);
+  const [partners] = useDbQuery(() => contentRepo.listCompliancePartners(), [], []);
   return (
     <>
       <Card>
@@ -541,7 +595,7 @@ export function ComplianceSection() {
           <TitleWithIcon icon={<ShieldCheck size={16} color={colors.fpo} />} title="Compliances required for an FPO" />
         </CardHeader>
         <CardContent>
-          {COMPLIANCE_EXPLAINER.map((c) => (
+          {explainer.map((c) => (
             <View key={c.title} style={s.itemCard}>
               <Text size="sm" weight="600">{c.title}</Text>
               <Muted style={{ marginTop: 4 }}>{c.detail}</Muted>
@@ -553,7 +607,7 @@ export function ComplianceSection() {
       <Card>
         <CardHeader><CardTitle>Connect with Professionals</CardTitle></CardHeader>
         <CardContent>
-          {COMPLIANCE_PARTNERS.map((p) => (
+          {partners.map((p) => (
             <View key={p.name} style={s.itemCard}>
               <Text size="sm" weight="600">{p.name}</Text>
               <Muted>{p.svc}</Muted>
@@ -576,14 +630,28 @@ export function ComplianceSection() {
 
 export function CapacityBuildingSection() {
   const [tab, setTab] = useState<null | "value" | "mgmt">(null);
+  const [valueCourses] = useDbQuery(() => contentRepo.listCourses("value"), [], []);
+  const [mgmtCourses] = useDbQuery(() => contentRepo.listCourses("mgmt"), [], []);
   return (
     <>
-      <ChipRow>
-        <Chip label="Value Addition Hub" accent={colors.fpo} active={tab === "value"}
-          onPress={() => setTab(tab === "value" ? null : "value")} />
-        <Chip label="Professional Management Courses" accent={colors.fpo} active={tab === "mgmt"}
-          onPress={() => setTab(tab === "mgmt" ? null : "mgmt")} />
-      </ChipRow>
+      {/* Cards, not pill capsules — consistent with every other section selector
+          in the FPO view (FpoHelpScreen, FpoMyScreen, FpoPartnersScreen). */}
+      <SectionCardRow>
+        <SectionCard
+          title="Value Addition Hub"
+          accent={colors.fpo}
+          active={tab === "value"}
+          onPress={() => setTab(tab === "value" ? null : "value")}
+          icon={<Sprout size={22} color={tab === "value" ? "#fff" : colors.fpo} />}
+        />
+        <SectionCard
+          title="Professional Management Courses"
+          accent={colors.fpo}
+          active={tab === "mgmt"}
+          onPress={() => setTab(tab === "mgmt" ? null : "mgmt")}
+          icon={<GraduationCap size={22} color={tab === "mgmt" ? "#fff" : colors.fpo} />}
+        />
+      </SectionCardRow>
 
       {tab === null && <EmptyHint>Tap an option above.</EmptyHint>}
 
@@ -592,7 +660,7 @@ export function CapacityBuildingSection() {
           <CardHeader><CardTitle>Value Addition Hub</CardTitle></CardHeader>
           <CardContent>
             <View style={{ gap: spacing.md }}>
-              {VALUE_COURSES.map((c) => (
+              {valueCourses.map((c) => (
                 <CourseCard key={c.name} name={c.name} by={c.by} progress={c.progress} thumb={c.thumb} accent={colors.fpo} />
               ))}
             </View>
@@ -605,7 +673,7 @@ export function CapacityBuildingSection() {
           <CardHeader><CardTitle>Professional Management Courses</CardTitle></CardHeader>
           <CardContent>
             <View style={{ gap: spacing.md }}>
-              {MGMT_COURSES.map((c) => (
+              {mgmtCourses.map((c) => (
                 <CourseCard key={c.name} name={c.name} by={c.by} progress={c.progress} thumb={c.thumb} accent={colors.fpo} />
               ))}
             </View>
@@ -619,7 +687,8 @@ export function CapacityBuildingSection() {
 export function ExpertNetworkSection() {
   const [openExpert, setOpenExpert] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
-  const expert = EXPERTS.find((e) => e.name === openExpert);
+  const [experts] = useDbQuery(() => contentRepo.listExperts(), [], []);
+  const expert = experts.find((e) => e.name === openExpert);
 
   return (
     <Card>
@@ -627,7 +696,7 @@ export function ExpertNetworkSection() {
         <TitleWithIcon icon={<MessageCircle size={16} color={colors.fpo} />} title="Expert network & testimonials" />
       </CardHeader>
       <CardContent>
-        {EXPERTS.map((t) => (
+        {experts.map((t) => (
           <View key={t.name} style={s.itemCard}>
             <Text size="sm" weight="600">{t.name}</Text>
             <Muted>{t.role}</Muted>
@@ -664,30 +733,38 @@ export function ExpertNetworkSection() {
 /* ========= KNOW MY FPO ========= */
 
 export function FpoProfileSection() {
-  const { activeFpoId } = useApp();
   const { width } = useWindowDimensions();
-  const fpo = fpoById(activeFpoId) ?? FPOS[0];
-  const cum = cumulativeFor(fpo.id);
+  const { fpoId, fpo } = useActiveFpo();
+  const [cum] = useDbQuery<FpoCumulative>(
+    () => fpoRepo.cumulativeFor(fpoId), [fpoId],
+    { totalMembers: 0, totalLandAcres: 0, cropwise: [] },
+  );
   const chartW = width - spacing.lg * 4;
 
-  const [name, setName] = useState(fpo.name);
-  const [regNo, setRegNo] = useState(fpo.regNo);
-  const [district, setDistrict] = useState(`${fpo.district} / ${fpo.block}`);
-  const [inc, setInc] = useState(fpo.incorporated);
-  const [warehouse, setWarehouse] = useState(String(fpo.warehouseMT));
-  const [processing, setProcessing] = useState(fpo.processing.has ? fpo.processing.type! : "None");
+  const [name, setName] = useState("");
+  const [regNo, setRegNo] = useState("");
+  const [district, setDistrict] = useState("");
+  const [inc, setInc] = useState("");
+  const [warehouse, setWarehouse] = useState("");
+  const [processing, setProcessing] = useState("");
+
+  // The FPO now arrives asynchronously from SQLite, so the editable fields are
+  // populated when it lands rather than in the useState initialisers.
+  useEffect(() => {
+    if (fpo == null) return;
+    setName(fpo.name);
+    setRegNo(fpo.regNo);
+    setDistrict(`${fpo.district} / ${fpo.block}`);
+    setInc(fpo.incorporated);
+    setWarehouse(String(fpo.warehouseMT));
+    setProcessing(fpo.processing.has ? fpo.processing.type ?? "None" : "None");
+  }, [fpo]);
 
   return (
     <>
       <Card>
         <CardHeader>
-          <View style={s.rowBetween}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
-              <Building2 size={16} color={colors.fpo} />
-              <CardTitle>FPO Details</CardTitle>
-            </View>
-            <Badge color={colors.fpoForeground} bg={colors.fpo}>{fpo.tier}</Badge>
-          </View>
+          <TitleWithIcon icon={<Building2 size={16} color={colors.fpo} />} title="FPO Details" />
         </CardHeader>
         <CardContent>
           <Field label="Name"><Input value={name} onChangeText={setName} /></Field>
@@ -753,12 +830,17 @@ export function FpoProfileSection() {
 type Status = "Active" | "At-risk" | "Dormant";
 
 export function RelationshipsSection() {
-  const { activeFpoId } = useApp();
-  const cum = cumulativeFor(activeFpoId);
+  const { fpoId } = useActiveFpo();
+  const [cum] = useDbQuery<FpoCumulative>(
+    () => fpoRepo.cumulativeFor(fpoId), [fpoId],
+    { totalMembers: 0, totalLandAcres: 0, cropwise: [] },
+  );
+  const [members] = useDbQuery<MemberEngagement[]>(() => fpoRepo.listMemberEngagement(fpoId), [fpoId], []);
+  const [feedback] = useDbQuery(() => contentRepo.listSellerFeedback(fpoId), [fpoId], []);
   // Business logic preserved verbatim from the web app.
-  const procurable = MEMBER_ENGAGEMENT.filter((m) => m.status === "Active").reduce((a, m) => a + m.soldThroughFPO * 1.6, 0);
+  const procurable = members.filter((m) => m.status === "Active").reduce((a, m) => a + m.soldThroughFPO * 1.6, 0);
   const [filters, setFilters] = useState<Record<Status, boolean>>({ "Active": true, "At-risk": true, "Dormant": true });
-  const filtered = useMemo(() => MEMBER_ENGAGEMENT.filter((m) => filters[m.status]), [filters]);
+  const filtered = useMemo(() => members.filter((m) => filters[m.status]), [members, filters]);
 
   return (
     <>
@@ -777,7 +859,7 @@ export function RelationshipsSection() {
               { key: "rating", label: "Rating" },
               { key: "note", label: "Note", flex: 1.8 },
             ]}
-            rows={SELLER_FEEDBACK.map((f) => ({
+            rows={feedback.map((f) => ({
               buyer: f.buyer, commodity: f.commodity, qty: String(f.qty_mt), date: f.date,
               rating: <Text size="xs" noTranslate>{"★".repeat(f.stars) + "☆".repeat(5 - f.stars)}</Text>,
               note: <Muted>{f.note}</Muted>,

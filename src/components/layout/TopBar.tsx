@@ -1,9 +1,11 @@
 import React, { useState } from "react";
 import { Modal, Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Check, ChevronLeft, Globe, Sprout, User } from "lucide-react-native";
-import { useApp, LANG_LABELS, type Lang } from "../../lib/app-state";
-import { DEFAULT_FARMER_ID, FARMERS, FPOS, fpoById } from "../../lib/mockData";
+import { Check, ChevronLeft, Globe, Shield, Sprout, User } from "lucide-react-native";
+import { useApp, LANG_LABELS, type Lang, type Role } from "../../lib/app-state";
+import { farmerRepo, fpoRepo } from "../../db";
+import { useDbQuery } from "../../db/useDbQuery";
+import type { FPO, Farmer } from "../../db/types";
 import { accentColors, colors, radius, spacing, type Accent } from "../../theme";
 import { Button, Text, Muted } from "../ui";
 
@@ -16,21 +18,25 @@ export function TopBar({
   accent,
   onOpenFarmerProfile,
   onBack,
-  actionKey = "switchRole",
 }: {
   accent?: Accent;
   onOpenFarmerProfile?: () => void;
   /** When provided, renders a Back affordance at the far left of the header. */
   onBack?: () => void;
-  /** Label/behaviour of the right-hand action. Farmer uses "logout". */
-  actionKey?: "switchRole" | "logout";
 }) {
-  const { lang, setLang, t, logout, activeFpoId } = useApp();
+  const { lang, setLang, t, logout, activeFpoId, session, profileId, switchRole } = useApp();
   const insets = useSafeAreaInsets();
   const [langOpen, setLangOpen] = useState(false);
+  const [roleOpen, setRoleOpen] = useState(false);
 
-  const farmer = FARMERS.find((f) => f.id === DEFAULT_FARMER_ID);
-  const fpo = fpoById(activeFpoId) ?? FPOS[0];
+  // The signed-in farmer, not a fixed constant — an admin viewing the farmer role
+  // and a farmer login both resolve through the session's profile id.
+  const farmerId = accent === "farmer" ? profileId : null;
+  const [farmer] = useDbQuery<Farmer | null>(
+    () => (farmerId == null ? Promise.resolve(null) : farmerRepo.getFarmerById(farmerId)),
+    [farmerId], null);
+  const [fpo] = useDbQuery<FPO | null>(
+    () => fpoRepo.getFpoById(activeFpoId), [activeFpoId], null);
   const accentColor = accent ? accentColors[accent].base : colors.primary;
 
   return (
@@ -70,7 +76,7 @@ export function TopBar({
               <View style={{ flex: 1 }}>
                 <Text size="xxs" weight="600" color={colors.mutedForeground}>FPO</Text>
                 <Text size="sm" weight="700" color={colors.fpo} numberOfLines={1}>
-                  {fpo.name.split(" Farmer")[0]}
+                  {(fpo?.name ?? "").split(" Farmer")[0]}
                 </Text>
               </View>
             </>
@@ -88,15 +94,52 @@ export function TopBar({
         </View>
 
         <View style={s.right}>
+          {/* Admins hold every view, so they get an in-place switcher rather than
+              having to sign out and back in to change role. */}
+          {session?.isAdmin === true && (
+            <Pressable
+              onPress={() => setRoleOpen(true)}
+              style={[s.langBtn, { borderColor: accentColor }]}
+              accessibilityLabel="Switch role view"
+            >
+              <Shield size={14} color={accentColor} />
+              <Text size="xxs" weight="700" color={accentColor} noTranslate>
+                {session.activeRole.toUpperCase()}
+              </Text>
+            </Pressable>
+          )}
           <Pressable onPress={() => setLangOpen(true)} style={s.langBtn} accessibilityLabel="Language">
             <Globe size={14} color={colors.mutedForeground} />
             <Text size="xxs" weight="600">{LANG_LABELS[lang]}</Text>
           </Pressable>
           <Button variant="outline" size="sm" onPress={logout} accent={accentColor}>
-            {t(actionKey)}
+            {t("logout")}
           </Button>
         </View>
       </View>
+
+      <Modal visible={roleOpen} transparent animationType="fade" onRequestClose={() => setRoleOpen(false)}>
+        <Pressable style={s.backdrop} onPress={() => setRoleOpen(false)}>
+          <View style={s.sheet}>
+            <View style={{ padding: spacing.lg, paddingBottom: spacing.sm }}>
+              <Text size="sm" weight="700">Switch view</Text>
+              <Muted>{`Signed in as ${session?.displayName ?? ""}`}</Muted>
+            </View>
+            {(session?.viewableRoles ?? []).map((r: Role) => (
+              <Pressable
+                key={r}
+                onPress={() => { setRoleOpen(false); void switchRole(r); }}
+                style={s.option}
+              >
+                <Text size="sm" style={{ flex: 1 }} noTranslate>
+                  {r === "buyer" ? "Buyer / Seller" : r.toUpperCase()}
+                </Text>
+                {r === session?.activeRole && <Check size={16} color={accentColors[r].base} />}
+              </Pressable>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
 
       <Modal visible={langOpen} transparent animationType="fade" onRequestClose={() => setLangOpen(false)}>
         <Pressable style={s.backdrop} onPress={() => setLangOpen(false)}>

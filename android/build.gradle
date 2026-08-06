@@ -1,6 +1,15 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 
 buildscript {
+  ext {
+    // Pinned from node_modules/react-native/gradle/libs.versions.toml (RN 0.86.2's
+    // own bundled version catalog — this project no longer delegates to Expo's catalog).
+    minSdkVersion = 24
+    targetSdkVersion = 36
+    compileSdkVersion = 36
+    buildToolsVersion = "36.0.0"
+    ndkVersion = "27.1.12297006"
+  }
   repositories {
     google()
     mavenCentral()
@@ -20,5 +29,4 @@ allprojects {
   }
 }
 
-apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"

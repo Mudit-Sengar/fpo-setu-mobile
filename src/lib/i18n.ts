@@ -44,8 +44,8 @@ const MR: Record<string, string> = {
   "Login as Farmer": "शेतकरी म्हणून लॉगिन",
   "Login as FPO": "एफपीओ म्हणून लॉगिन",
   "Login as Buyer / Supplier": "खरेदीदार / पुरवठादार म्हणून लॉगिन",
-  "Use 'Switch Role' in the top bar to return to the Login screen and pick a different role.":
-    "वरील पट्टीतील ‘भूमिका बदला’ वापरून लॉगिन स्क्रीनवर परत जा आणि दुसरी भूमिका निवडा.",
+  "Use 'Logout' in the top bar to return to the Login screen and pick a different role.":
+    "वरील पट्टीतील ‘लॉग आउट’ वापरून लॉगिन स्क्रीनवर परत जा आणि दुसरी भूमिका निवडा.",
 
   // Farmer landing
   "Farmer — FPO Setu": "शेतकरी — एफपीओ सेतू",
@@ -165,7 +165,7 @@ const MR: Record<string, string> = {
   "Development": "विकास",
   "Expansion Planner": "विस्तार योजना",
   "Market Insights": "बाजार माहिती",
-  "Access Credit": "कर्ज मिळवा",
+  "Credit Access": "कर्ज मिळवा",
   "Working capital for kharif aggregation": "खरिप संकलनासाठी खेळते भांडवल",
   "Requested amount": "मागणी रक्कम",
   "Amount ₹": "रक्कम ₹",

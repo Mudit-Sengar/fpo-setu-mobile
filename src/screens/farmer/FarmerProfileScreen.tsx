@@ -4,7 +4,10 @@ import { useNavigation } from "@react-navigation/native";
 import {
   ArrowLeft, Building2, Calendar, FileBadge, IdCard, LandPlot, MapPin, Sprout,
 } from "lucide-react-native";
-import { DEFAULT_FARMER_ID, FARMERS, FPOS, fpoById } from "../../lib/mockData";
+import { useSessionFarmer, useSessionFarmerId } from "../../lib/useSessionProfile";
+import { farmerRepo, fpoRepo } from "../../db";
+import { useDbQuery } from "../../db/useDbQuery";
+import type { FPO } from "../../db/types";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import { Badge, Button, Card, CardContent, Muted, Text } from "../../components/ui";
@@ -16,17 +19,38 @@ import { BackLink } from "../../components/common";
  */
 export function FarmerProfileScreen() {
   const nav = useNavigation();
-  const farmer = FARMERS.find((f) => f.id === DEFAULT_FARMER_ID) ?? FARMERS[0];
-  const fpo = (farmer.fpoId ? fpoById(farmer.fpoId) : undefined) ?? FPOS[0];
+  const farmer = useSessionFarmer();
+  const farmerId = useSessionFarmerId();
+  const [fpo] = useDbQuery<FPO | null>(
+    () => (farmer?.fpoId != null ? fpoRepo.getFpoById(farmer.fpoId) : Promise.resolve(null)),
+    [farmer?.fpoId], null);
 
-  // AgriStack-derived dummy fields — hardcoded in the web app too.
-  const taluka = "Akole";
-  const state = "Maharashtra";
-  const surveyNo = "127/3B";
-  const khasra = "KH-2024-00831";
-  const landHa = (farmer.landAcres / 2.471).toFixed(2);
+  // AgriStack-derived fields — now columns on `farmers` rather than local constants.
+  const [extras] = useDbQuery(
+    () => (farmerId == null
+      ? Promise.resolve({ taluka: "", state: "", surveyNo: "", khasraNo: "" })
+      : farmerRepo.getFarmerProfileExtras(farmerId)),
+    [farmerId],
+    { taluka: "", state: "", surveyNo: "", khasraNo: "" },
+  );
+  const { taluka, state, surveyNo, khasraNo: khasra } = extras ?? {
+    taluka: "", state: "", surveyNo: "", khasraNo: "",
+  };
+  const landHa = ((farmer?.landAcres ?? 0) / 2.471).toFixed(2);
 
-  const initials = farmer.name.split(" ").map((p) => p[0]).slice(0, 2).join("");
+  const initials = (farmer?.name ?? "").split(" ").map((p) => p[0]).slice(0, 2).join("");
+
+  // The whole screen describes one farmer, so render the shell (header/back) until
+  // the row arrives rather than threading optional chaining through every field.
+  if (farmer == null || fpo == null) {
+    return (
+      <RoleShell accent="farmer" screenName="Farmer Profile" onBack={() => nav.goBack()}>
+        <View style={s.topRow}>
+          <BackLink label="Back" onPress={() => nav.goBack()} icon={<ArrowLeft size={16} color={colors.mutedForeground} />} />
+        </View>
+      </RoleShell>
+    );
+  }
 
   return (
     <RoleShell accent="farmer" screenName="Farmer Profile" onBack={() => nav.goBack()}>

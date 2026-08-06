@@ -1,35 +1,49 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { marketRepo } from "../db";
+import type { Demand, SupplyPost } from "../db/types";
 
 /**
- * Buyer demand / supplier supply postings — the ONLY real persistence in the
- * whole app (everything else is toast-only or component state).
+ * Buyer demand / supplier supply postings.
  *
- * Ported from the web app's src/routes/buyer.index.tsx load/save helpers.
- * Storage keys are unchanged; localStorage -> AsyncStorage means these are now
- * async, so callers load them in an effect instead of inline during render.
+ * These used to be JSON blobs in AsyncStorage (keys "setu.demands"/"setu.supplies").
+ * They now live in the `demands` / `supplies` SQLite tables — this module stays as a
+ * thin façade so the buyer screens keep their existing call sites, and so the
+ * save-whole-array semantics they were written against still work.
+ *
+ * NOTE: pre-existing AsyncStorage postings are NOT migrated. They were demo data
+ * created during testing, and the tables seed empty by design.
  */
 
-export interface Demand {
-  id: string; commodity: string; qty_mt: number; delivery: string; grade: string; location: string;
-}
-export interface SupplyPost {
-  id: string; item: string; category: string; qty: string; pricePerUnit: string; region: string; window: string;
-}
-
-const KEY = "setu.demands";
-const SKEY = "setu.supplies";
+export type { Demand, SupplyPost };
 
 export async function loadDemands(): Promise<Demand[]> {
-  try { return JSON.parse((await AsyncStorage.getItem(KEY)) || "[]"); } catch { return []; }
+  try { return await marketRepo.listDemands(); } catch { return []; }
 }
-export async function saveDemands(d: Demand[]): Promise<void> {
-  try { await AsyncStorage.setItem(KEY, JSON.stringify(d)); } catch { /* storage unavailable */ }
+
+/**
+ * Persists any demand in `list` that isn't stored yet. Callers pass the full
+ * array (the old AsyncStorage contract); inserts are keyed on id, so re-saving an
+ * unchanged list is a no-op rather than a duplicate.
+ */
+export async function saveDemands(list: Demand[]): Promise<void> {
+  try {
+    const existing = new Set((await marketRepo.listDemands()).map((d) => d.id));
+    for (const d of list) {
+      if (!existing.has(d.id)) await marketRepo.insertDemand(d);
+    }
+  } catch { /* database unavailable — the UI keeps its optimistic local copy */ }
 }
+
 export async function loadSupplies(): Promise<SupplyPost[]> {
-  try { return JSON.parse((await AsyncStorage.getItem(SKEY)) || "[]"); } catch { return []; }
+  try { return await marketRepo.listSupplies(); } catch { return []; }
 }
-export async function saveSupplies(d: SupplyPost[]): Promise<void> {
-  try { await AsyncStorage.setItem(SKEY, JSON.stringify(d)); } catch { /* storage unavailable */ }
+
+export async function saveSupplies(list: SupplyPost[]): Promise<void> {
+  try {
+    const existing = new Set((await marketRepo.listSupplies()).map((s) => s.id));
+    for (const s of list) {
+      if (!existing.has(s.id)) await marketRepo.insertSupply(s);
+    }
+  } catch { /* database unavailable — the UI keeps its optimistic local copy */ }
 }
 
 /** Fallbacks used by the matching screen when nothing has been posted yet. */

@@ -3,7 +3,10 @@ import { Image, StyleSheet, View } from "react-native";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { FarmerTabParamList } from "../../navigation/types";
 import { BookOpen, Play, Trophy } from "lucide-react-native";
-import { FARMER_COURSES, imgSource, type Thumb } from "../../lib/mockData";
+import { imgSource, type Thumb } from "../../lib/mockData";
+import { contentRepo } from "../../db";
+import { keyToThumb } from "../../db/assets";
+import { useDbQuery } from "../../db/useDbQuery";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import { Card, CardContent, CardHeader, CardTitle, Dialog, Muted } from "../../components/ui";
@@ -12,19 +15,6 @@ import { useFarmerBack } from "../../hooks/useFarmerBack";
 
 interface V { title: string; duration: string; transcript: string; thumb: Thumb }
 
-const farmerMale = require("../../assets/farmer-male.jpg");
-const farmerFemale = require("../../assets/farmer-female.jpg");
-
-// Ported verbatim from the web app's farmer.learn.tsx local STORIES array.
-const STORIES: V[] = [
-  { title: "Success Story — Ravindra from Akole", duration: "4:08",
-    transcript: "Ravindra earned ₹38,000 extra in one season by selling 80 quintals of onion through Samruddha FPO, thanks to grading and direct processor linkage.",
-    thumb: farmerMale },
-  { title: "Learn from Gayatri Devi from Pune", duration: "3:50",
-    transcript: "Gayatri Devi led a women-only FPO in Pune that scaled from 40 to 220 members in 18 months by focusing on vegetables, packaging, and HORECA buyers.",
-    thumb: farmerFemale },
-];
-
 /** Ported from the web app's src/routes/farmer.learn.tsx */
 export function LearnScreen() {
   const nav = useNavigation();
@@ -32,6 +22,22 @@ export function LearnScreen() {
   const goBack = useFarmerBack();
   const [tab, setTab] = useState<null | "courses" | "stories">(null);
   const [open, setOpen] = useState<V | null>(null);
+
+  const [courseRows] = useDbQuery(() => contentRepo.listCourses("farmer"), [], []);
+  const [storyRows] = useDbQuery(() => contentRepo.listStories(), [], []);
+
+  const courses: V[] = courseRows.map((c) => ({
+    title: c.name,
+    duration: c.duration ?? "",
+    transcript: c.transcript ?? "",
+    thumb: c.thumb,
+  }));
+  const stories: V[] = storyRows.map((s) => ({
+    title: s.title,
+    duration: s.duration,
+    transcript: s.transcript,
+    thumb: keyToThumb(s.thumbKey),
+  }));
 
   // Section deep-link, used by Krishi Bandhu ("success stories" -> stories).
   useEffect(() => {
@@ -61,7 +67,7 @@ export function LearnScreen() {
           <CardContent>
             <Muted style={{ marginBottom: spacing.sm }}>Follow the sequence — each course builds on the previous.</Muted>
             <View style={{ gap: spacing.md }}>
-              {FARMER_COURSES.map((v, i) => (
+              {courses.map((v, i) => (
                 <VideoCard key={v.title} title={v.title} duration={v.duration} thumb={v.thumb}
                   index={i + 1} accent={colors.farmer} onPress={() => setOpen(v)} />
               ))}
@@ -75,7 +81,7 @@ export function LearnScreen() {
           <CardHeader><CardTitle>Success stories from FPO members</CardTitle></CardHeader>
           <CardContent>
             <View style={{ gap: spacing.md }}>
-              {STORIES.map((v) => (
+              {stories.map((v) => (
                 <VideoCard key={v.title} title={v.title} duration={v.duration} thumb={v.thumb}
                   accent={colors.farmer} onPress={() => setOpen(v)} />
               ))}
