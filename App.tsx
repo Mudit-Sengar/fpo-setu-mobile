@@ -1,5 +1,5 @@
 import React from "react";
-import { StatusBar } from "expo-status-bar";
+import { StatusBar } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AppStateProvider } from "./src/lib/app-state";
 import { Toaster } from "./src/components/ui/Toast";
@@ -22,7 +22,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <AppStateProvider>
-        <StatusBar style="dark" />
+        <StatusBar barStyle="dark-content" />
         <RootNavigator />
         <Toaster />
       </AppStateProvider>

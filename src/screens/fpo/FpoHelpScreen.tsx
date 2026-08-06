@@ -1,11 +1,10 @@
 import React, { useState } from "react";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { ArrowLeft } from "lucide-react-native";
+import { ArrowLeft, GraduationCap, MessageCircle, TrendingUp } from "lucide-react-native";
 import { colors } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
-import { Chip, ChipRow } from "../../components/ui";
-import { BackLink, EmptyHint } from "../../components/common";
+import { BackLink, EmptyHint, SectionCard, SectionCardRow } from "../../components/common";
 import { ExpertNetworkSection } from "../../features/fpo-sections";
 import { MarketReadinessHubSection } from "../../features/market-readiness";
 import type { FpoStackParamList } from "../../navigation/types";
@@ -25,13 +24,16 @@ export function FpoHelpScreen() {
     <RoleShell accent="fpo" screenName="Learn & Expert Help">
       <BackLink label="Back" onPress={() => nav.goBack()} icon={<ArrowLeft size={16} color={colors.mutedForeground} />} />
 
-      <ChipRow>
-        <Chip label="Capacity Building" accent={colors.fpo} active={false} onPress={() => nav.navigate("FpoCapacity")} />
-        <Chip label="Market Readiness Hub" accent={colors.fpo} active={sub === "market"}
-          onPress={() => setSub(sub === "market" ? null : "market")} />
-        <Chip label="Expert Network & Testimonials" accent={colors.fpo} active={sub === "experts"}
-          onPress={() => setSub(sub === "experts" ? null : "experts")} />
-      </ChipRow>
+      <SectionCardRow>
+        <SectionCard title="Capacity Building" accent={colors.fpo} active={false} onPress={() => nav.navigate("FpoCapacity")}
+          icon={<GraduationCap size={22} color={colors.fpo} />} />
+        <SectionCard title="Market Readiness Hub" accent={colors.fpo} active={sub === "market"}
+          onPress={() => setSub(sub === "market" ? null : "market")}
+          icon={<TrendingUp size={22} color={sub === "market" ? "#fff" : colors.fpo} />} />
+        <SectionCard title="Expert Network & Testimonials" accent={colors.fpo} active={sub === "experts"}
+          onPress={() => setSub(sub === "experts" ? null : "experts")}
+          icon={<MessageCircle size={22} color={sub === "experts" ? "#fff" : colors.fpo} />} />
+      </SectionCardRow>
 
       {sub === null && <EmptyHint>Pick a button to open that section.</EmptyHint>}
       {sub === "market" && <MarketReadinessHubSection />}

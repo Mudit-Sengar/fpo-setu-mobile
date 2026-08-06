@@ -1,8 +1,11 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { initDatabase } from "../db";
+import { authService, type Session, type SignInResult, type ViewRole } from "../services/authService";
 
 export type Lang = "en" | "hi" | "mr";
-export type Role = "farmer" | "fpo" | "buyer";
+/** The role whose view is open. Kept as `Role` so existing consumers still read. */
+export type Role = ViewRole;
 
 // Ported verbatim from the web app's src/lib/app-state.tsx
 const STRINGS: Record<string, { en: string; hi: string; mr: string }> = {
@@ -12,8 +15,7 @@ const STRINGS: Record<string, { en: string; hi: string; mr: string }> = {
     hi: "किसान, एफपीओ और बाज़ार को जोड़ने वाला सेतु",
     mr: "शेतकरी, एफपीओ आणि बाजार जोडणारा सेतू",
   },
-  switchRole: { en: "Switch Role", mr: "भूमिका बदला", hi: "भूमिका बदलें" },
-  // Not in the web app — the Farmer header now says "Logout" instead of
+  // Not in the web app — every role's header says "Logout" instead of
   // "Switch Role". Same underlying behaviour (clears the persisted role).
   logout: { en: "Logout", hi: "लॉग आउट", mr: "बाहेर पडा" },
   farmer: { en: "Farmer", hi: "किसान", mr: "शेतकरी" },
@@ -33,7 +35,13 @@ export const LANG_LABELS: Record<Lang, string> = {
 // Storage keys kept identical to the web app for continuity.
 const K_LANG = "setu.lang";
 const K_FPO = "setu.fpo";
-const K_ROLE = "setu.role";
+/**
+ * Persisted session. Stores only the user id and which view was open — never the
+ * password or a copy of the profile. Everything else is re-read from the database
+ * on launch, so a user who has since been deactivated or had a role revoked does
+ * not get in on a stale session.
+ */
+const K_SESSION = "setu.session";
 
 interface AppState {
   lang: Lang;
@@ -41,8 +49,19 @@ interface AppState {
   t: (k: keyof typeof STRINGS) => string;
   activeFpoId: string;
   setActiveFpoId: (id: string) => void;
+
+  /** The authenticated session, or null when signed out. */
+  session: Session | null;
+  /** Active view role — null when signed out. Navigator keys off this. */
   role: Role | null;
-  login: (role: Role) => void;
+  /**
+   * The domain record backing the active view (`farmers.id` / `fpos.id` /
+   * `buyers.id`). Screens read their profile from this instead of a constant.
+   */
+  profileId: string | null;
+  signIn: (username: string, password: string, role: Role) => Promise<SignInResult>;
+  /** Admin-only: open another role's view without signing in again. */
+  switchRole: (role: Role) => Promise<boolean>;
   logout: () => void;
   /** True once persisted state has been read back from AsyncStorage. */
   ready: boolean;
@@ -53,7 +72,7 @@ const Ctx = createContext<AppState | null>(null);
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>("en");
   const [activeFpoId, setActiveFpoIdState] = useState<string>("fpo-1");
-  const [role, setRole] = useState<Role | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
 
   // MIGRATION NOTE: the web app read localStorage synchronously inside useState
@@ -64,12 +83,32 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        const pairs = await AsyncStorage.multiGet([K_LANG, K_FPO, K_ROLE]);
+        // Open/migrate/seed SQLite before anything renders — every screen now reads
+        // its data through the repositories, so `ready` must also mean "DB usable".
+        await initDatabase();
+      } catch {
+        // Screens degrade to empty lists rather than crashing on a DB failure.
+      }
+      try {
+        const pairs = await AsyncStorage.multiGet([K_LANG, K_FPO, K_SESSION]);
         if (cancelled) return;
         const map = Object.fromEntries(pairs) as Record<string, string | null>;
         if (map[K_LANG]) setLangState(map[K_LANG] as Lang);
         if (map[K_FPO]) setActiveFpoIdState(map[K_FPO] as string);
-        if (map[K_ROLE]) setRole(map[K_ROLE] as Role);
+
+        if (map[K_SESSION]) {
+          const { userId, activeRole } = JSON.parse(map[K_SESSION]) as
+            { userId: number; activeRole: ViewRole };
+          // Revalidated against the database, not trusted as stored.
+          const restored = await authService.restore(userId, activeRole);
+          if (cancelled) return;
+          if (restored != null) {
+            setSession(restored);
+            if (restored.activeRole === "fpo") setActiveFpoIdState(restored.profileId);
+          } else {
+            await AsyncStorage.removeItem(K_SESSION).catch(() => {});
+          }
+        }
       } catch {
         // Storage unavailable — fall back to in-memory defaults, same as the
         // web app's `typeof localStorage === "undefined"` guards.
@@ -90,14 +129,34 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     void AsyncStorage.setItem(K_FPO, id).catch(() => {});
   }, []);
 
-  const login = useCallback((r: Role) => {
-    setRole(r);
-    void AsyncStorage.setItem(K_ROLE, r).catch(() => {});
+  /** Applies a new session: state, the FPO the shell reads, and storage. */
+  const adoptSession = useCallback((s: Session) => {
+    setSession(s);
+    // The FPO screens read `activeFpoId`; keep it pointing at the session's FPO
+    // profile so an FPO login sees its own organisation.
+    if (s.activeRole === "fpo") setActiveFpoIdState(s.profileId);
+    void AsyncStorage.setItem(
+      K_SESSION, JSON.stringify({ userId: s.userId, activeRole: s.activeRole }),
+    ).catch(() => {});
   }, []);
 
+  const signIn = useCallback(async (username: string, password: string, r: Role) => {
+    const result = await authService.signIn(username, password, r);
+    if (result.ok) adoptSession(result.session);
+    return result;
+  }, [adoptSession]);
+
+  const switchRole = useCallback(async (r: Role) => {
+    if (session == null) return false;
+    const next = await authService.switchRole(session, r);
+    if (next == null) return false;
+    adoptSession(next);
+    return true;
+  }, [session, adoptSession]);
+
   const logout = useCallback(() => {
-    setRole(null);
-    void AsyncStorage.removeItem(K_ROLE).catch(() => {});
+    setSession(null);
+    void AsyncStorage.removeItem(K_SESSION).catch(() => {});
   }, []);
 
   const value = useMemo<AppState>(() => ({
@@ -106,11 +165,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     t: (k) => STRINGS[k]?.[lang] ?? String(k),
     activeFpoId,
     setActiveFpoId,
-    role,
-    login,
+    session,
+    role: session?.activeRole ?? null,
+    profileId: session?.profileId ?? null,
+    signIn,
+    switchRole,
     logout,
     ready,
-  }), [lang, setLang, activeFpoId, setActiveFpoId, role, login, logout, ready]);
+  }), [lang, setLang, activeFpoId, setActiveFpoId, session, signIn, switchRole, logout, ready]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

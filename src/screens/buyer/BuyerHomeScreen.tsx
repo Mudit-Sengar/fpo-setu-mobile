@@ -3,10 +3,13 @@ import { Pressable, StyleSheet, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import type { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
 import { ClipboardList, Database, Package, Plus } from "lucide-react-native";
-import { BUYERS, SUPPLIERS } from "../../lib/mockData";
+import { marketRepo } from "../../db";
+import { useDbQuery } from "../../db/useDbQuery";
+import type { Buyer, Supplier } from "../../db/types";
 import {
   loadDemands, loadSupplies, saveDemands, saveSupplies, type Demand, type SupplyPost,
 } from "../../lib/buyer-storage";
+import { useApp } from "../../lib/app-state";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import {
@@ -28,18 +31,36 @@ export function BuyerHomeScreen() {
 }
 
 function BuyerView() {
-  const buyer = BUYERS[0];
+  // The buyer record linked to the signed-in account, not simply the first row —
+  // a different buyer login (or an admin in the buyer view) loads its own profile.
+  const { profileId } = useApp();
+  const [buyer] = useDbQuery<Buyer | null>(
+    () => (profileId == null ? Promise.resolve(null) : marketRepo.getBuyerById(profileId)),
+    [profileId], null);
   const nav = useNavigation<BottomTabNavigationProp<BuyerTabParamList>>();
   const [demands, setDemands] = useState<Demand[]>([]);
   const [showProfile, setShowProfile] = useState(false);
 
-  const [name, setName] = useState(buyer.name);
-  const [type, setType] = useState(buyer.type as string);
-  const [commodities, setCommodities] = useState(buyer.commodities.join(", "));
-  const [volume, setVolume] = useState(String(buyer.typicalVolumeMT));
-  const [location, setLocation] = useState(buyer.location);
-  const [specs, setSpecs] = useState(buyer.qualitySpecs);
-  const [window, setWindow] = useState(buyer.procurementWindow);
+  const [name, setName] = useState("");
+  const [type, setType] = useState("");
+  const [commodities, setCommodities] = useState("");
+  const [volume, setVolume] = useState("");
+  const [location, setLocation] = useState("");
+  const [specs, setSpecs] = useState("");
+  const [window, setWindow] = useState("");
+
+  // The buyer profile now loads from SQLite, so the editable fields are populated
+  // when it arrives rather than in the useState initialisers.
+  useEffect(() => {
+    if (buyer == null) return;
+    setName(buyer.name);
+    setType(buyer.type as string);
+    setCommodities(buyer.commodities.join(", "));
+    setVolume(String(buyer.typicalVolumeMT));
+    setLocation(buyer.location);
+    setSpecs(buyer.qualitySpecs);
+    setWindow(buyer.procurementWindow);
+  }, [buyer]);
 
   useEffect(() => { void loadDemands().then(setDemands); }, []);
 
@@ -259,19 +280,33 @@ function CheckboxGroup({ label, options, other }: { label: string; options: stri
 /* ============== Supplier side ============== */
 
 function SupplierView() {
-  const sup = SUPPLIERS[0];
+  const [suppliers] = useDbQuery<Supplier[]>(() => marketRepo.listSuppliers(), [], []);
+  const sup = suppliers[0] ?? null;
   const nav = useNavigation<BottomTabNavigationProp<BuyerTabParamList>>();
   const [supplies, setSupplies] = useState<SupplyPost[]>([]);
 
-  const [name, setName] = useState(`${sup.name} (${sup.brand})`);
-  const [cats, setCats] = useState(sup.categories.join(", "));
-  const [products, setProducts] = useState(sup.products);
-  const [price, setPrice] = useState(sup.priceRange);
-  const [certs, setCerts] = useState(sup.certifications);
-  const [regions, setRegions] = useState(sup.regions);
-  const [moq, setMoq] = useState(sup.minOrder);
-  const [lead, setLead] = useState(String(sup.leadTimeDays));
-  const [seasons, setSeasons] = useState(sup.seasons);
+  const [name, setName] = useState("");
+  const [cats, setCats] = useState("");
+  const [products, setProducts] = useState("");
+  const [price, setPrice] = useState("");
+  const [certs, setCerts] = useState("");
+  const [regions, setRegions] = useState("");
+  const [moq, setMoq] = useState("");
+  const [lead, setLead] = useState("");
+  const [seasons, setSeasons] = useState("");
+
+  useEffect(() => {
+    if (sup == null) return;
+    setName(`${sup.name} (${sup.brand})`);
+    setCats(sup.categories.join(", "));
+    setProducts(sup.products);
+    setPrice(sup.priceRange);
+    setCerts(sup.certifications);
+    setRegions(sup.regions);
+    setMoq(sup.minOrder);
+    setLead(String(sup.leadTimeDays));
+    setSeasons(sup.seasons);
+  }, [sup]);
 
   useEffect(() => { void loadSupplies().then(setSupplies); }, []);
 

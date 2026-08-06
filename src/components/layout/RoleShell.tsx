@@ -1,7 +1,8 @@
 import React, { type ReactNode } from "react";
 import { ScrollView, StyleSheet, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, spacing, type Accent } from "../../theme";
-import { AssistantWidget } from "../AssistantWidget";
+import { AssistantWidget, FAB_BOTTOM_OFFSET, FAB_SIZE } from "../AssistantWidget";
 import { PrototypeFooter, TopBar } from "./TopBar";
 
 /**
@@ -41,8 +42,12 @@ export function RoleShell({
   // is covered automatically and can't reintroduce it by omission.
   const showAssistant = accent !== "farmer";
 
-  // Farmer header shows "Logout"; FPO/Buyer keep "Switch Role".
-  const actionKey = accent === "farmer" ? "logout" : "switchRole";
+  // The FAB is absolutely positioned over the ScrollView, so the default bottom
+  // padding isn't enough to scroll the last card out from under it.
+  const insets = useSafeAreaInsets();
+  const contentPaddingBottom = showAssistant
+    ? insets.bottom + FAB_BOTTOM_OFFSET + FAB_SIZE + spacing.md
+    : spacing.xxl * 2;
 
   const body = (
     <>
@@ -57,7 +62,6 @@ export function RoleShell({
         accent={accent}
         onOpenFarmerProfile={onOpenFarmerProfile}
         onBack={onBack}
-        actionKey={actionKey}
       />
       {header != null && (
         <View style={{ backgroundColor: accentSoft(accent), borderBottomWidth: 1, borderBottomColor: colors.border }}>
@@ -67,7 +71,7 @@ export function RoleShell({
       {scroll ? (
         <ScrollView
           style={s.flex}
-          contentContainerStyle={s.content}
+          contentContainerStyle={[s.content, { paddingBottom: contentPaddingBottom }]}
           keyboardShouldPersistTaps="handled"
         >
           {body}
@@ -75,7 +79,7 @@ export function RoleShell({
       ) : (
         <View style={[s.flex, s.content]}>{body}</View>
       )}
-      {showAssistant && <AssistantWidget screenName={screenName} />}
+      {showAssistant && <AssistantWidget screenName={screenName} accent={accent} />}
     </View>
   );
 }

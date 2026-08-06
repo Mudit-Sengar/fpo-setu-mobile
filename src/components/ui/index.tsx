@@ -171,6 +171,11 @@ export function Input({
   numberOfLines,
   style,
   editable = true,
+  secureTextEntry,
+  autoCapitalize,
+  autoCorrect,
+  onSubmitEditing,
+  returnKeyType,
 }: {
   value: string;
   onChangeText: (t: string) => void;
@@ -180,6 +185,12 @@ export function Input({
   numberOfLines?: number;
   style?: StyleProp<ViewStyle>;
   editable?: boolean;
+  /** Masks input. Used by the password field on the login screen. */
+  secureTextEntry?: boolean;
+  autoCapitalize?: "none" | "sentences" | "words" | "characters";
+  autoCorrect?: boolean;
+  onSubmitEditing?: () => void;
+  returnKeyType?: "done" | "go" | "next" | "search" | "send";
 }) {
   return (
     <TextInput
@@ -191,6 +202,11 @@ export function Input({
       multiline={multiline}
       numberOfLines={numberOfLines}
       editable={editable}
+      secureTextEntry={secureTextEntry}
+      autoCapitalize={autoCapitalize}
+      autoCorrect={autoCorrect}
+      onSubmitEditing={onSubmitEditing}
+      returnKeyType={returnKeyType}
       style={[
         s.input,
         multiline ? { height: (numberOfLines ?? 3) * 22 + 16, textAlignVertical: "top" } : null,
@@ -325,20 +341,56 @@ export function Gauge({ value, label }: { value: number; label?: string }) {
 /* ----------------------------------------------------------------- Table */
 
 /**
- * The web app used HTML <table> heavily. RN has no table primitive, so this is a
- * flex-based equivalent: fixed column flex weights, horizontally scrollable when
- * the caller supplies a minWidth.
+ * The web app used HTML <table> heavily. RN has no table primitive, so this is the
+ * equivalent: one responsive pattern shared by every table in the app.
+ *
+ * Columns are sized in **resolved pixels**, not flex weights. That distinction is
+ * the whole point: `flex` only divides a *bounded* width, and a horizontal
+ * ScrollView gives its child an unbounded one. Inside a scrolling table every row
+ * therefore laid itself out against its own content instead of a shared grid, so
+ * no two rows agreed on a column position and none matched the header — the
+ * visible misalignment in Log Meeting and Bookkeeping.
+ *
+ * Here the table measures the space it has, resolves each `flex` weight into a
+ * concrete width once, and hands that same number to the header cell and to every
+ * body cell. Cell content can then wrap freely without moving any other column.
  */
 export function Table({ columns, rows, minWidth }: {
   columns: { key: string; label: string; flex?: number; align?: "left" | "right" }[];
   rows: Record<string, ReactNode>[];
+  /**
+   * Width the table needs to stay readable. When the available space is narrower
+   * the table keeps this width and scrolls horizontally rather than squeezing
+   * columns until content clips — which is what happens on smaller Android phones.
+   */
   minWidth?: number;
 }) {
+  const [available, setAvailable] = useState(0);
+
+  const gaps = spacing.sm * (columns.length - 1);
+  const totalFlex = columns.reduce((sum, c) => sum + (c.flex ?? 1), 0);
+
+  // Grow to fill the card when there's room; never shrink below `minWidth`.
+  const tableWidth = Math.max(available, minWidth ?? 0);
+  const scrolls = tableWidth > available;
+
+  /**
+   * ONE shared per-column style, applied identically to the header cell and every
+   * body cell, so a column's width and alignment cannot drift between them.
+   * `alignItems` makes `align: "right"` apply to JSX cells (Badges, Buttons) too,
+   * not just plain strings — a `textAlign` alone would leave a right-aligned
+   * header sitting above a left-aligned Badge.
+   */
+  const cellStyle = (c: { flex?: number; align?: "left" | "right" }) => ({
+    width: ((c.flex ?? 1) / totalFlex) * (tableWidth - gaps),
+    alignItems: (c.align === "right" ? "flex-end" : "flex-start") as "flex-end" | "flex-start",
+  });
+
   const body = (
-    <View style={{ minWidth }}>
+    <View style={{ width: tableWidth }}>
       <View style={s.tableHeadRow}>
         {columns.map((c) => (
-          <View key={c.key} style={{ flex: c.flex ?? 1 }}>
+          <View key={c.key} style={cellStyle(c)}>
             <Text
               size="xxs"
               weight="700"
@@ -352,15 +404,18 @@ export function Table({ columns, rows, minWidth }: {
       </View>
       {rows.map((r, i) => (
         <View key={i} style={s.tableRow}>
-          {columns.map((c) => (
-            <View key={c.key} style={{ flex: c.flex ?? 1 }}>
-              {typeof r[c.key] === "string" || typeof r[c.key] === "number" ? (
-                <Text size="xs" style={{ textAlign: c.align ?? "left" }}>{r[c.key] as string}</Text>
-              ) : (
-                r[c.key]
-              )}
-            </View>
-          ))}
+          {columns.map((c) => {
+            const cell = r[c.key];
+            return (
+              <View key={c.key} style={cellStyle(c)}>
+                {typeof cell === "string" || typeof cell === "number" ? (
+                  <Text size="xs" style={{ textAlign: c.align ?? "left" }}>{String(cell)}</Text>
+                ) : (
+                  cell
+                )}
+              </View>
+            );
+          })}
         </View>
       ))}
       {rows.length === 0 && (
@@ -371,10 +426,18 @@ export function Table({ columns, rows, minWidth }: {
     </View>
   );
 
-  if (minWidth) {
-    return <ScrollView horizontal showsHorizontalScrollIndicator={false}>{body}</ScrollView>;
-  }
-  return body;
+  // The outer View is the measuring frame; widths can only be resolved once it has
+  // reported how much room the card actually gives us, which is what makes the
+  // same table work across Android screen sizes.
+  return (
+    <View onLayout={(e) => setAvailable(e.nativeEvent.layout.width)}>
+      {available > 0 && (
+        scrolls
+          ? <ScrollView horizontal showsHorizontalScrollIndicator={false}>{body}</ScrollView>
+          : body
+      )}
+    </View>
+  );
 }
 
 /* ---------------------------------------------------------------- Dialog */
@@ -582,6 +645,9 @@ const s = StyleSheet.create({
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   tableHeadRow: {
     flexDirection: "row",
+    // alignItems matches tableRow below — without it a two-line header cell sat at a
+    // different vertical offset than its single-line neighbours.
+    alignItems: "flex-end",
     gap: spacing.sm,
     paddingVertical: spacing.sm,
     borderBottomWidth: 1,

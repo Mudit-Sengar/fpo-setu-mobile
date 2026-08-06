@@ -5,9 +5,10 @@ import {
   Building2, ChevronDown, ChevronUp, Lightbulb, LineChart as LineIcon,
   ListOrdered, MapPin, Sprout, TrendingUp, Users,
 } from "lucide-react-native";
-import {
-  DAILY_APMC_PRICES, DEFAULT_FARMER_ID, FARMERS, FPOS, fpoById,
-} from "../../lib/mockData";
+import { useSessionFarmer } from "../../lib/useSessionProfile";
+import { fpoRepo, marketRepo } from "../../db";
+import { useDbQuery } from "../../db/useDbQuery";
+import type { FPO, FpoMonthlySummary } from "../../db/types";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import {
@@ -64,14 +65,22 @@ export function MyFpoScreen() {
 function MarketInsights() {
   const { width } = useWindowDimensions();
   const chartW = width - spacing.lg * 2 - spacing.lg * 2;
-  const farmer = FARMERS.find((f) => f.id === DEFAULT_FARMER_ID)!;
-  const cropOptions = farmer.crops;
-  const [crop, setCrop] = useState(cropOptions[0]);
+  const farmer = useSessionFarmer();
+  // Memoised: a fresh `[]` each render would re-fire the crop-defaulting effect below.
+  const cropOptions = useMemo(() => farmer?.crops ?? [], [farmer]);
+  const [crop, setCrop] = useState("");
   const [duration, setDuration] = useState<"1w" | "1m">("1m");
   const [showApmcChart, setShowApmcChart] = useState(false);
   const [showDailyChart, setShowDailyChart] = useState(false);
 
-  const series = DAILY_APMC_PRICES[crop] ?? DAILY_APMC_PRICES.Onion;
+  useEffect(() => {
+    if (crop === "" && cropOptions.length > 0) setCrop(cropOptions[0]);
+  }, [crop, cropOptions]);
+
+  const [series] = useDbQuery<{ date: string; price: number }[]>(
+    () => (crop === "" ? Promise.resolve([]) : marketRepo.getDailyPrices(crop)),
+    [crop], [],
+  );
   const sliced = duration === "1w" ? series.slice(-7) : series;
 
   // Simulated FPO-vs-APMC monthly snapshot — logic preserved from the web app.
@@ -203,13 +212,24 @@ function MarketInsights() {
 }
 
 function MyFpoDetails() {
-  const farmer = FARMERS.find((f) => f.id === DEFAULT_FARMER_ID)!;
-  const fpo = fpoById(farmer.fpoId!)!;
-  // Hardcoded local constants — preserved exactly as in the web app.
-  const monthSold = 8, sellPrice = 900, onwardPrice = 1200, fpoProfit = 82000;
-  const profitShare = Math.round((farmer.sharePct / 100) * fpoProfit);
+  const farmer = useSessionFarmer();
+  const [fpo] = useDbQuery<FPO | null>(
+    () => (farmer?.fpoId != null ? fpoRepo.getFpoById(farmer.fpoId) : Promise.resolve(null)),
+    [farmer?.fpoId], null);
+  // Was hardcoded locals; now a per-FPO row in fpo_monthly_summary.
+  const [summary] = useDbQuery<FpoMonthlySummary | null>(
+    () => (fpo != null ? fpoRepo.getMonthlySummary(fpo.id) : Promise.resolve(null)),
+    [fpo?.id], null);
   const [open, setOpen] = useState(false);
+
+  const monthSold = summary?.monthSoldQ ?? 0;
+  const sellPrice = summary?.sellPrice ?? 0;
+  const onwardPrice = summary?.onwardPrice ?? 0;
+  const fpoProfit = summary?.fpoProfit ?? 0;
+  const profitShare = Math.round(((farmer?.sharePct ?? 0) / 100) * fpoProfit);
   const sales = monthSold * sellPrice;
+
+  if (farmer == null || fpo == null) return null;
 
   return (
     <>
@@ -287,10 +307,13 @@ function MyFpoDetails() {
 }
 
 function NearbyFpos() {
-  const farmer = FARMERS.find((f) => f.id === DEFAULT_FARMER_ID)!;
+  const farmer = useSessionFarmer();
+  const [fpos] = useDbQuery<FPO[]>(() => fpoRepo.listFpos(), [], []);
   const recommended = useMemo(
-    () => FPOS.filter((f) => f.district === farmer.district || f.commodities.some((c) => farmer.crops.includes(c))).slice(0, 4),
-    [farmer],
+    () => (farmer == null ? [] : fpos.filter(
+      (f) => f.district === farmer.district || f.commodities.some((c) => farmer.crops.includes(c)),
+    ).slice(0, 4)),
+    [fpos, farmer],
   );
   const [openFor, setOpenFor] = useState<string | null>(null);
 

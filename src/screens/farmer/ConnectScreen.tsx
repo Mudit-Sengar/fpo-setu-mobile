@@ -3,9 +3,10 @@ import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { FarmerTabParamList } from "../../navigation/types";
 import { Handshake, MapPin, MessageCircle, Send, Users2 } from "lucide-react-native";
-import {
-  DEFAULT_FARMER_ID, FARMER_BUYER_MATCHES, FARMERS, SIMILAR_FARMERS,
-} from "../../lib/mockData";
+import { useSessionFarmer } from "../../lib/useSessionProfile";
+import { farmerRepo } from "../../db";
+import { useDbQuery } from "../../db/useDbQuery";
+import type { FarmerBuyerMatch, SimilarFarmer } from "../../db/types";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import {
@@ -50,6 +51,8 @@ export function ConnectScreen() {
 }
 
 function ConnectBuyers() {
+  const [buyerMatches] = useDbQuery<FarmerBuyerMatch[]>(
+    () => farmerRepo.listFarmerBuyerMatches(), [], []);
   const [msgFor, setMsgFor] = useState<string | null>(null);
   const [msg, setMsg] = useState("Namaste, I have produce matching your requirement and would like to discuss pricing.");
 
@@ -63,7 +66,7 @@ function ConnectBuyers() {
         </CardContent>
       </Card>
 
-      {FARMER_BUYER_MATCHES.map((b) => (
+      {buyerMatches.map((b) => (
         <Card key={b.id}>
           <CardContent style={{ paddingTop: spacing.lg }}>
             <View style={{ flexDirection: "row", gap: spacing.sm }}>
@@ -116,8 +119,9 @@ function ConnectBuyers() {
 }
 
 function ConnectFarmers() {
-  const me = FARMERS.find((f) => f.id === DEFAULT_FARMER_ID)!;
-  const [crop, setCrop] = useState(me.crops[0]);
+  const me = useSessionFarmer();
+  const [similar] = useDbQuery<SimilarFarmer[]>(() => farmerRepo.listSimilarFarmers(), [], []);
+  const [crop, setCrop] = useState("");
   const [grade, setGrade] = useState("A");
   const [quality, setQuality] = useState<"any" | "Premium" | "Export" | "Standard">("any");
   const [maxKm, setMaxKm] = useState("100");
@@ -125,12 +129,17 @@ function ConnectFarmers() {
   const [chat, setChat] = useState<{ who: "me" | "them"; text: string }[]>([]);
   const [draft, setDraft] = useState("");
 
+  // Default the crop filter to the farmer's first crop once they load.
+  useEffect(() => {
+    if (me != null && crop === "") setCrop(me.crops[0] ?? "");
+  }, [me, crop]);
+
   const km = Number(maxKm) || 0;
   // Filter logic preserved verbatim from the web app.
-  const matches = useMemo(() => SIMILAR_FARMERS.filter((s) =>
+  const matches = useMemo(() => similar.filter((s) =>
     s.crop === crop && (grade === "any" || s.grade === grade) &&
     (quality === "any" || s.quality === quality) && s.distanceKm <= km,
-  ), [crop, grade, quality, km]);
+  ), [similar, crop, grade, quality, km]);
 
   function send() {
     if (!draft.trim()) return;

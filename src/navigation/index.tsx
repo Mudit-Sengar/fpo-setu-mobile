@@ -13,7 +13,7 @@ import type {
   BuyerTabParamList, FarmerStackParamList, FarmerTabParamList, FpoStackParamList, RootStackParamList,
 } from "./types";
 
-import { RoleSelectScreen } from "../screens/RoleSelectScreen";
+import { LoginScreen } from "../screens/LoginScreen";
 import { FarmerHomeScreen } from "../screens/farmer/FarmerHomeScreen";
 import { MyFpoScreen } from "../screens/farmer/MyFpoScreen";
 import { LearnScreen } from "../screens/farmer/LearnScreen";
@@ -158,7 +158,7 @@ export function RootNavigator() {
     <NavigationContainer>
       <RootStack.Navigator screenOptions={{ headerShown: false }}>
         {role == null ? (
-          <RootStack.Screen name="RoleSelect" component={RoleSelectScreen} />
+          <RootStack.Screen name="RoleSelect" component={LoginScreen} />
         ) : role === "farmer" ? (
           <RootStack.Screen name="Farmer" component={FarmerNavigator} />
         ) : role === "fpo" ? (

@@ -5,7 +5,7 @@ import type { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
 import {
   Building2, GraduationCap, Landmark, Mic, MicOff, Send, Users, X,
 } from "lucide-react-native";
-import { DEFAULT_FARMER_ID, FARMERS } from "../../lib/mockData";
+import { useSessionFarmer } from "../../lib/useSessionProfile";
 import {
   INTENT_EXAMPLES, resolveFarmerIntent, type FarmerDestination,
 } from "../../lib/farmer-intents";
@@ -26,7 +26,7 @@ import type { FarmerTabParamList } from "../../navigation/types";
  */
 export function FarmerHomeScreen() {
   const nav = useNavigation<BottomTabNavigationProp<FarmerTabParamList>>();
-  const farmer = FARMERS.find((f) => f.id === DEFAULT_FARMER_ID);
+  const farmer = useSessionFarmer();
   const [q, setQ] = useState("");
 
   /** Single navigation sink for every resolved intent. */

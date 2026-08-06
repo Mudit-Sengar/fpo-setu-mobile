@@ -2,7 +2,9 @@ import React, { useCallback, useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { ArrowDown, Layers, MapPin, Network, Package, Star, Users } from "lucide-react-native";
-import { FARMERS, FPOS, INPUT_NEEDS, type FPO, type FPOSupply } from "../../lib/mockData";
+import { farmerRepo, fpoRepo } from "../../db";
+import { useDbQuery } from "../../db/useDbQuery";
+import type { Farmer, FPO, FPOSupply, InputNeed } from "../../db/types";
 import {
   DEFAULT_DEMAND, DEFAULT_SUPPLY, loadDemands, loadSupplies,
   type Demand, type SupplyPost,
@@ -30,6 +32,8 @@ export function BuyerMatchingScreen() {
 interface Candidate { fpo: FPO; supply: FPOSupply; dist: number }
 
 function BuyerMatching() {
+  const [fpos] = useDbQuery<FPO[]>(() => fpoRepo.listFpos(), [], []);
+  const [farmers] = useDbQuery<Farmer[]>(() => farmerRepo.listFarmers(), [], []);
   const [latest, setLatest] = useState<Demand>(DEFAULT_DEMAND);
   const [commodity, setCommodity] = useState(DEFAULT_DEMAND.commodity);
   const [grade, setGrade] = useState(DEFAULT_DEMAND.grade);
@@ -58,7 +62,7 @@ function BuyerMatching() {
   // Matching logic preserved verbatim from the web app, including the
   // pseudo-random distance derived from the FPO id character code.
   const candidates = useMemo<Candidate[]>(() => {
-    return FPOS
+    return fpos
       .map((f) => {
         const sup = f.supply.find((x) => x.commodity.toLowerCase() === commodity.toLowerCase());
         if (!sup) return null;
@@ -70,7 +74,7 @@ function BuyerMatching() {
       .filter((c): c is Candidate => c !== null)
       .filter((c) => c.dist <= kmNum)
       .sort((a, b) => b.supply.qty_mt - a.supply.qty_mt);
-  }, [commodity, grade, kmNum]);
+  }, [fpos, commodity, grade, kmNum]);
 
   const fitsSingle = candidates.filter((c) => c.supply.qty_mt >= qtyNum);
   const needsCluster = fitsSingle.length === 0 && candidates.length > 0;
@@ -88,7 +92,7 @@ function BuyerMatching() {
     return { picked, total, anchor: picked[0]?.fpo };
   }, [needsCluster, candidates, qtyNum]);
 
-  const farmerMatches = FARMERS.filter((f) => f.crops.includes(commodity)).slice(0, 3);
+  const farmerMatches = farmers.filter((f) => f.crops.includes(commodity)).slice(0, 3);
 
   return (
     <>
@@ -205,9 +209,17 @@ function BuyerMatching() {
 }
 
 function SupplierMatching() {
+  const [fpos] = useDbQuery<FPO[]>(() => fpoRepo.listFpos(), [], []);
+  const [farmers] = useDbQuery<Farmer[]>(() => farmerRepo.listFarmers(), [], []);
   const [latest, setLatest] = useState<SupplyPost>(DEFAULT_SUPPLY);
   const [category, setCategory] = useState(DEFAULT_SUPPLY.category);
   const [maxKm, setMaxKm] = useState("400");
+
+  // Input needs come from the active FPO's list; the first seeded FPO owns them.
+  const [allNeeds] = useDbQuery<InputNeed[]>(
+    () => (fpos[0] != null ? fpoRepo.listInputNeeds(fpos[0].id) : Promise.resolve([])),
+    [fpos], [],
+  );
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
@@ -221,18 +233,21 @@ function SupplierMatching() {
   }, []));
 
   const kmNum = Number(maxKm) || 0;
-  const matchingNeeds = INPUT_NEEDS.filter((n) => n.category === category);
+  const matchingNeeds = useMemo(
+    () => allNeeds.filter((n) => n.category === category),
+    [allNeeds, category],
+  );
 
   const matchedFpos = useMemo(() => {
-    return FPOS.slice(0, 6).map((f, i) => ({
+    return fpos.slice(0, 6).map((f, i) => ({
       fpo: f,
       need: matchingNeeds[i % Math.max(1, matchingNeeds.length)] ?? matchingNeeds[0],
       dist: 40 + i * 35,
       score: 95 - i * 7,
     })).filter((m) => m.dist <= kmNum && m.need);
-  }, [matchingNeeds, kmNum]);
+  }, [fpos, matchingNeeds, kmNum]);
 
-  const farmerMatches = FARMERS.slice(0, 3).map((f, i) => ({ farmer: f, dist: 20 + i * 30, score: 88 - i * 5 }));
+  const farmerMatches = farmers.slice(0, 3).map((f, i) => ({ farmer: f, dist: 20 + i * 30, score: 88 - i * 5 }));
 
   return (
     <>
