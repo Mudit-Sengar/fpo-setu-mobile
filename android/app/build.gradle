@@ -147,6 +147,27 @@ android {
     }
 }
 
+// --- Debug builds need Metro; make sure it's actually running -------------
+// Debug APKs have no embedded JS bundle (see the `react { }` block above) —
+// they load it from Metro at runtime. Launching one while Metro is down
+// throws "Unable to load script" on the very first frame. `npm run android`
+// already starts Metro itself, but Android Studio's own ▶ Run button does
+// not — it only assembles, installs and launches — which is why this kept
+// recurring. Hooking the debug variant's preBuild task (via the stable
+// `preBuildProvider` API, so this survives AGP version bumps) catches every
+// path that produces a debug APK — CLI, `npm run android`, and Android
+// Studio — without touching release builds, which embed their own bundle
+// and don't need Metro. See scripts/ensure-metro.js for the actual check.
+android.applicationVariants.configureEach { variant ->
+    if (variant.buildType.name == "debug") {
+        def ensureMetro = tasks.register("ensureMetroFor${variant.name.capitalize()}", Exec) {
+            workingDir = rootDir.parentFile
+            commandLine("node", "scripts/ensure-metro.js")
+        }
+        variant.preBuildProvider.configure { dependsOn(ensureMetro) }
+    }
+}
+
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")

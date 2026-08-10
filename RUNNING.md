@@ -46,20 +46,39 @@ Or from a terminal:
 %LOCALAPPDATA%\Android\Sdk\emulator\emulator.exe -avd YOUR_AVD_NAME
 ```
 
-### 1b. Start the dev server, then install & launch
-
-```bash
-npm start
-```
-
-In a second terminal:
+### 1b. Install & launch
 
 ```bash
 npm run android
 ```
 
-This builds the debug variant via the React Native CLI (`react-native run-android`), installs
-it on the running emulator/device, and launches it connected to the Metro server from 1b.
+This ensures Metro is running (starting it silently in the background if it isn't — see
+`scripts/ensure-metro.js`), builds the debug variant via the React Native CLI
+(`react-native run-android`), installs it on the running emulator/device, and launches it.
+
+You do **not** need to run `npm start` first — `npm run android` handles that for you now,
+without opening a separate visible terminal window for it (see the note below). Running
+`npm start` yourself first is still fine if you want Metro's interactive terminal (reload
+shortcuts, live log output) — `npm run android` will just detect it's already up and skip
+starting another one.
+
+When you're done for the day, or if the dev server ever seems stuck, stop it cleanly with:
+
+```bash
+npm run stop
+```
+
+This kills whatever is listening on port 8081 and its child processes (Metro's transform
+workers), rather than hunting for node.exe processes in Task Manager.
+
+> **Why `npm run android` used to open a new "Metro" Command Prompt window every time.**
+> `react-native run-android` has a built-in fallback: if it doesn't detect Metro already
+> running, it opens Metro in a brand-new terminal window so you can see its banner. That
+> window's script ends in `pause`, so it never closes itself — running `npm run android`
+> repeatedly (the normal dev loop) left more of these open every time. `npm run android` now
+> runs `scripts/ensure-metro.js` first (silently — no window) and passes `--no-packager` to
+> `react-native run-android`, which disables that fallback outright. Metro itself still starts
+> and stays running in the background exactly as before; only the extra visible window is gone.
 
 ### 1c. Or run on a physical phone over USB
 
@@ -105,6 +124,19 @@ On a **physical device over USB**, also forward the Metro port or the app can't 
 > If you see a white screen or *"Unable to load script"*, it's almost always this: Metro isn't
 > running, or the port isn't forwarded. Force-stop and relaunch the app once Metro is up if it
 > was already open when Metro wasn't running yet.
+
+**This is now auto-recovered for you in most cases.** Every debug build — whether triggered by
+`gradlew installDebug`, `npm run android`, or Android Studio's own ▶ Run button — runs
+`scripts/ensure-metro.js` as part of the build (see the hook in `android/app/build.gradle`,
+scoped to the `debug` variant only). It checks `http://127.0.0.1:8081/status`; if Metro isn't
+answering, it starts it (output goes to `.metro-autostart.log`, gitignored) and waits up to 30s
+for it to become ready before letting the build proceed. If Metro genuinely can't start, the
+build fails with a clear message instead of producing an APK that will blank-screen on launch.
+
+This only fires when a build actually runs, though — it can't help if Metro dies **after** the
+app is already installed and you just tap the icon again (e.g. after a reboot) without
+rebuilding. In that specific case you'll still see "Unable to load script" once; press ▶ Run in
+Android Studio again (or `npm start`) and relaunch.
 
 ### 2c. Build the **release** variant — standalone, no Metro
 

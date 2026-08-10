@@ -29,7 +29,8 @@
   },
   "scripts": {
     "start": "react-native start",
-    "android": "react-native run-android",
+    "android": "node scripts/ensure-metro.js && react-native run-android --no-packager",
+    "stop": "node scripts/stop-metro.js",
     "typecheck": "tsc --noEmit",
     "apk": "cd android && gradlew.bat assembleRelease",
     "apk:debug": "cd android && gradlew.bat assembleDebug",

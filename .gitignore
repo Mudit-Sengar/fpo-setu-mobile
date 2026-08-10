@@ -21,6 +21,7 @@ expo-env.d.ts
 # Metro
 .metro-health-check*
 .metro.log
+.metro-autostart.log
 
 # emulator screenshots from scripts/shot.ps1
 .shots/
