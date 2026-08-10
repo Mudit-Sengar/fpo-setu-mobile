@@ -1,11 +1,11 @@
 import React, { useState } from "react";
 import { useNavigation } from "@react-navigation/native";
 import {
-  ArrowLeft, Banknote, ClipboardList, Landmark, Package, ShieldCheck, Truck, Users,
+  Banknote, ClipboardList, Landmark, Package, ShieldCheck, Truck, Users,
 } from "lucide-react-native";
 import { colors } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
-import { BackLink, EmptyHint, SectionCard, SectionCardRow } from "../../components/common";
+import { EmptyHint, SectionCard, SectionCardRow } from "../../components/common";
 import {
   AccessCreditSection, ComplianceSection, GovtSchemesSection, LocateBuyerSection,
   LocateSupplierSection, LogisticsSection, PostRequestSection,
@@ -21,9 +21,7 @@ export function FpoPartnersScreen() {
   const iconColor = (v: Exclude<Sub, null>) => (sub === v ? "#fff" : colors.fpo);
 
   return (
-    <RoleShell accent="fpo" screenName="Find Partners">
-      <BackLink label="Back" onPress={() => nav.goBack()} icon={<ArrowLeft size={16} color={colors.mutedForeground} />} />
-
+    <RoleShell accent="fpo" screenName="Find Partners" onBack={() => nav.goBack()}>
       <SectionCardRow>
         <SectionCard title="Post Request" accent={colors.fpo} active={sub === "post"} onPress={() => toggle("post")}
           icon={<ClipboardList size={22} color={iconColor("post")} />} />

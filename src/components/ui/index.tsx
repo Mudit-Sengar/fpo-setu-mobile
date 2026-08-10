@@ -13,6 +13,7 @@ import {
   TextInput,
   View,
   type StyleProp,
+  type TextStyle,
   type ViewStyle,
 } from "react-native";
 import { Check, ChevronDown, ChevronUp, Star, X } from "lucide-react-native";
@@ -183,7 +184,12 @@ export function Input({
   keyboardType?: "default" | "numeric" | "email-address" | "phone-pad";
   multiline?: boolean;
   numberOfLines?: number;
-  style?: StyleProp<ViewStyle>;
+  /**
+   * Applied to the underlying TextInput, so this is a TextStyle — callers need
+   * text-layout props (height, textAlignVertical) to pin a field to one line.
+   * TextStyle extends ViewStyle, so existing callers are unaffected.
+   */
+  style?: StyleProp<TextStyle>;
   editable?: boolean;
   /** Masks input. Used by the password field on the login screen. */
   secureTextEntry?: boolean;
@@ -210,7 +216,7 @@ export function Input({
       style={[
         s.input,
         multiline ? { height: (numberOfLines ?? 3) * 22 + 16, textAlignVertical: "top" } : null,
-        style as never,
+        style,
       ]}
     />
   );

@@ -1,10 +1,10 @@
 import React, { useState } from "react";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { ArrowLeft, GraduationCap, MessageCircle, TrendingUp } from "lucide-react-native";
+import { GraduationCap, MessageCircle, TrendingUp } from "lucide-react-native";
 import { colors } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
-import { BackLink, EmptyHint, SectionCard, SectionCardRow } from "../../components/common";
+import { EmptyHint, SectionCard, SectionCardRow } from "../../components/common";
 import { ExpertNetworkSection } from "../../features/fpo-sections";
 import { MarketReadinessHubSection } from "../../features/market-readiness";
 import type { FpoStackParamList } from "../../navigation/types";
@@ -21,9 +21,7 @@ export function FpoHelpScreen() {
   const [sub, setSub] = useState<Sub>(null);
 
   return (
-    <RoleShell accent="fpo" screenName="Learn & Expert Help">
-      <BackLink label="Back" onPress={() => nav.goBack()} icon={<ArrowLeft size={16} color={colors.mutedForeground} />} />
-
+    <RoleShell accent="fpo" screenName="Learn & Expert Help" onBack={() => nav.goBack()}>
       <SectionCardRow>
         <SectionCard title="Capacity Building" accent={colors.fpo} active={false} onPress={() => nav.navigate("FpoCapacity")}
           icon={<GraduationCap size={22} color={colors.fpo} />} />

@@ -136,6 +136,9 @@ export function FarmerHomeScreen() {
               onChangeText={setQ}
               placeholder="मला मदत करा... / e.g. onion price today"
               editable={!listening}
+              multiline={false}
+              numberOfLines={1}
+              style={s.bandhuInput}
             />
           </View>
 
@@ -198,6 +201,16 @@ const s = StyleSheet.create({
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
   },
   bandhuRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  /**
+   * Pinned to one line. The bilingual placeholder is longer than the field is
+   * wide, and Android wraps a TextInput's hint onto a second line unless the
+   * field is explicitly single-line — the old padding-driven height was sized
+   * for one line, so that second line showed as a clipped sliver. `multiline`
+   * is passed as `false` (not left undefined) at the call site so the hint is
+   * ellipsised instead of wrapped; the fixed height matches the 46pt mic/send
+   * buttons beside it and keeps the single line vertically centred.
+   */
+  bandhuInput: { height: 46, paddingVertical: 0, textAlignVertical: "center" },
   iconBtn: {
     width: 46, height: 46, borderRadius: radius.md, borderWidth: 1.5,
     borderColor: colors.farmer, alignItems: "center", justifyContent: "center",

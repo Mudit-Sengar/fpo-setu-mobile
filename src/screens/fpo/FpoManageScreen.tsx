@@ -1,9 +1,9 @@
 import React, { useState } from "react";
 import { useNavigation } from "@react-navigation/native";
-import { ArrowLeft, BookOpenCheck, CalendarDays, TrendingUp } from "lucide-react-native";
+import { BookOpenCheck, CalendarDays, TrendingUp } from "lucide-react-native";
 import { colors } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
-import { BackLink, EmptyHint, SectionCard, SectionCardRow } from "../../components/common";
+import { EmptyHint, SectionCard, SectionCardRow } from "../../components/common";
 import {
   BookkeepingSection, ExpansionPlannerSection, MeetingSection,
 } from "../../features/fpo-sections";
@@ -17,9 +17,7 @@ export function FpoManageScreen() {
   const toggle = (v: Exclude<Sub, null>) => setSub(sub === v ? null : v);
 
   return (
-    <RoleShell accent="fpo" screenName="Manage & Grow Business">
-      <BackLink label="Back" onPress={() => nav.goBack()} icon={<ArrowLeft size={16} color={colors.mutedForeground} />} />
-
+    <RoleShell accent="fpo" screenName="Manage & Grow Business" onBack={() => nav.goBack()}>
       <SectionCardRow>
         <SectionCard title="Log Meeting" accent={colors.fpo} active={sub === "meet"} onPress={() => toggle("meet")}
           icon={<CalendarDays size={22} color={sub === "meet" ? "#fff" : colors.fpo} />} />
