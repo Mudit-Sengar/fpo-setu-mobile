@@ -162,7 +162,23 @@ export function SectionCard({
       ]}
     >
       {icon}
-      <Text size="xs" weight="700" center color={active ? "#ffffff" : colors.foreground}>
+      {/*
+        numberOfLines={1} + adjustsFontSizeToFit: at some screen widths a long
+        title (e.g. "Locate a Supplier") wraps to 2 lines while its row
+        siblings stay on 1 — Fabric's flexWrap container then miscalculates
+        that wrapped line's height, so the icon+text block renders shifted
+        within its own card AND every row below (including a lone full-width
+        card and any EmptyHint after it) can end up overlapping. Forcing a
+        single line and shrinking the font slightly only when a title
+        wouldn't otherwise fit removes the wrap entirely, so it can't trigger
+        that container miscalculation for any SectionCard, on any screen.
+        Full title text still always renders — nothing is truncated.
+      */}
+      <Text
+        size="xs" weight="700" center
+        numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}
+        color={active ? "#ffffff" : colors.foreground}
+      >
         {title}
       </Text>
     </Pressable>
