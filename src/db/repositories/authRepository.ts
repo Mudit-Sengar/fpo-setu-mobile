@@ -1,4 +1,4 @@
-import { withDb } from "../connection";
+import { withDb, withWrite } from "../connection";
 
 /**
  * All SQL for identity: users, roles, role assignments and the per-role profile
@@ -6,13 +6,22 @@ import { withDb } from "../connection";
  * which is what keeps a future swap to a remote backend a one-file change.
  */
 
-/** A role a user can hold. `admin` grants access to the other three. */
-export type RoleCode = "farmer" | "fpo" | "buyer" | "admin";
+/** A role a user can hold. `admin` grants access to all of the others. */
+export type RoleCode = "farmer" | "fpo" | "buyer" | "supplier" | "admin";
 
-/** The three roles that correspond to an actual app view. */
-export type ViewRole = Exclude<RoleCode, "admin">;
+/**
+ * The roles that correspond to an actual app view.
+ *
+ * `admin` is one of them now. It used to be an access grant only — a way to open
+ * the other four views — which left the things only an administrator does
+ * (creating accounts, assigning roles, disabling a party) with nowhere to live.
+ */
+export type ViewRole = RoleCode;
 
-export const VIEW_ROLES: ViewRole[] = ["farmer", "fpo", "buyer"];
+export const VIEW_ROLES: ViewRole[] = ["farmer", "fpo", "buyer", "supplier", "admin"];
+
+/** The roles that resolve to a party. Admin acts as itself, not as an entity. */
+export const PROFILE_ROLES: Exclude<ViewRole, "admin">[] = ["farmer", "fpo", "buyer", "supplier"];
 
 export interface UserRow {
   id: number;
@@ -27,11 +36,27 @@ export interface RoleRow {
   label: string;
 }
 
-/** Which table holds the profile link for each view role. */
-const PROFILE_TABLE: Record<ViewRole, { table: string; column: string; domain: string }> = {
-  farmer: { table: "farmer_profiles", column: "farmer_id", domain: "farmers" },
-  fpo: { table: "fpo_profiles", column: "fpo_id", domain: "fpos" },
-  buyer: { table: "buyer_profiles", column: "buyer_id", domain: "buyers" },
+/**
+ * The profile a session resolves to.
+ *
+ * `partyId` is the integer key every relationship table foreign-keys to;
+ * `entityId` is the entity's own natural key (farmers.id / fpos.id / ...), which
+ * is what the existing screens and repositories still read.
+ */
+export interface ProfileRef {
+  partyId: number;
+  entityId: string;
+}
+
+/**
+ * A view role maps 1:1 onto a party kind. Kept as an explicit map rather than a
+ * cast so adding a role that ISN'T a party kind fails to compile here first.
+ */
+const PARTY_KIND: Record<string, string> = {
+  farmer: "farmer",
+  fpo: "fpo",
+  buyer: "buyer",
+  supplier: "supplier",
 };
 
 function toUser(r: Record<string, unknown>): UserRow {
@@ -51,11 +76,8 @@ function toUser(r: Record<string, unknown>): UserRow {
  */
 export async function findUserByUsername(username: string): Promise<UserRow | null> {
   return withDb("findUserByUsername", async (db) => {
-    // COLLATE NOCASE on the column makes this case-insensitive, so `Farmer01`
-    // and `farmer01` are the same login.
     const rows = (await db.execute(
-      "SELECT * FROM users WHERE username = ? LIMIT 1;", [username.trim()],
-    )).rows ?? [];
+      "SELECT * FROM users WHERE username = ? LIMIT 1;", [username])).rows ?? [];
     return rows.length === 0 ? null : toUser(rows[0]);
   });
 }
@@ -88,24 +110,32 @@ export async function listRoles(): Promise<RoleRow[]> {
 }
 
 /**
- * The domain record id this user should see in the given role — `farmers.id`,
- * `fpos.id` or `buyers.id`.
+ * The party and entity this user should see in the given role.
  *
- * Falls back to the first row of the domain table when the user has no explicit
- * link, so a newly added database user without a profile row still lands on a
- * working screen instead of an empty one. Returns null only when the domain table
- * itself is empty.
+ * Returns null when no profile is linked. It deliberately does NOT fall back to
+ * the first row of the domain table, which is what it used to do: that made an
+ * unlinked account silently resolve to farmer MH-AH-2024-00831 / fpo-1 / b-1.
+ * Harmless while every screen was read-only, but the moment writes carry an
+ * author it becomes one account writing as another organisation. A missing
+ * profile is now a sign-in failure (authService's `no_profile`), which is
+ * recoverable by linking the profile — a silent cross-tenant write is not.
  */
-export async function getProfileId(userId: number, role: ViewRole): Promise<string | null> {
-  const { table, column, domain } = PROFILE_TABLE[role];
-  return withDb("getProfileId", async (db) => {
-    const linked = (await db.execute(
-      `SELECT ${column} AS pid FROM ${table} WHERE user_id = ? LIMIT 1;`, [userId],
+export async function getProfile(userId: number, role: ViewRole): Promise<ProfileRef | null> {
+  // Admin has no entity of its own: an administrator acts as themselves, so the
+  // session carries no party and every admin action is gated on the role instead
+  // of on a profile.
+  if (role === "admin") return { partyId: 0, entityId: "" };
+  return withDb("getProfile", async (db) => {
+    const rows = (await db.execute(
+      `SELECT p.id AS party_id, p.entity_id AS entity_id
+         FROM user_profiles up
+         JOIN parties p ON p.id = up.party_id
+        WHERE up.user_id = ? AND up.role_code = ? AND p.kind = ? AND p.is_active = 1
+        LIMIT 1;`,
+      [userId, role, PARTY_KIND[role]],
     )).rows ?? [];
-    if (linked.length > 0) return String(linked[0].pid);
-
-    const fallback = (await db.execute(`SELECT id FROM ${domain} ORDER BY id LIMIT 1;`)).rows ?? [];
-    return fallback.length === 0 ? null : String(fallback[0].id);
+    if (rows.length === 0) return null;
+    return { partyId: Number(rows[0].party_id), entityId: String(rows[0].entity_id) };
   });
 }
 
@@ -115,7 +145,7 @@ export async function getProfileId(userId: number, role: ViewRole): Promise<stri
 export async function createUser(
   username: string, passwordHash: string, displayName: string,
 ): Promise<number> {
-  return withDb("createUser", async (db) => {
+  return withWrite("createUser", async (db) => {
     await db.execute(
       "INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?);",
       [username, passwordHash, displayName],
@@ -126,15 +156,21 @@ export async function createUser(
 }
 
 export async function assignRole(userId: number, role: RoleCode): Promise<void> {
-  await withDb("assignRole", (db) => db.execute(
+  await withWrite("assignRole", (db) => db.execute(
     "INSERT OR IGNORE INTO user_roles (user_id, role_code) VALUES (?, ?);", [userId, role],
   ));
 }
 
-export async function linkProfile(userId: number, role: ViewRole, profileId: string): Promise<void> {
-  const { table, column } = PROFILE_TABLE[role];
-  await withDb("linkProfile", (db) => db.execute(
-    `INSERT OR REPLACE INTO ${table} (user_id, ${column}) VALUES (?, ?);`, [userId, profileId],
+/**
+ * Links a login to an entity for one role. The entity id is resolved to its party
+ * inside the same statement, so a caller can never store a party id belonging to
+ * the wrong kind.
+ */
+export async function linkProfile(userId: number, role: ViewRole, entityId: string): Promise<void> {
+  await withWrite("linkProfile", (db) => db.execute(
+    `INSERT OR REPLACE INTO user_profiles (user_id, role_code, party_id)
+       SELECT ?, ?, p.id FROM parties p WHERE p.kind = ? AND p.entity_id = ?;`,
+    [userId, role, PARTY_KIND[role], entityId],
   ));
 }
 

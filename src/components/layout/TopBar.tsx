@@ -6,7 +6,7 @@ import { useApp, LANG_LABELS, type Lang, type Role } from "../../lib/app-state";
 import { farmerRepo, fpoRepo } from "../../db";
 import { useDbQuery } from "../../db/useDbQuery";
 import type { FPO, Farmer } from "../../db/types";
-import { accentColors, colors, radius, spacing, type Accent } from "../../theme";
+import { accentColors, accentForRole, colors, radius, spacing, type Accent } from "../../theme";
 import { Button, Text, Muted } from "../ui";
 
 /**
@@ -32,10 +32,10 @@ export function TopBar({
   // The signed-in farmer, not a fixed constant — an admin viewing the farmer role
   // and a farmer login both resolve through the session's profile id.
   const farmerId = accent === "farmer" ? profileId : null;
-  const [farmer] = useDbQuery<Farmer | null>(
+  const farmer = useDbQuery<Farmer | null>(
     () => (farmerId == null ? Promise.resolve(null) : farmerRepo.getFarmerById(farmerId)),
     [farmerId], null);
-  const [fpo] = useDbQuery<FPO | null>(
+  const fpo = useDbQuery<FPO | null>(
     () => fpoRepo.getFpoById(activeFpoId), [activeFpoId], null);
   const accentColor = accent ? accentColors[accent].base : colors.primary;
 
@@ -132,9 +132,9 @@ export function TopBar({
                 style={s.option}
               >
                 <Text size="sm" style={{ flex: 1 }} noTranslate>
-                  {r === "buyer" ? "Buyer / Seller" : r.toUpperCase()}
+                  {r.toUpperCase()}
                 </Text>
-                {r === session?.activeRole && <Check size={16} color={accentColors[r].base} />}
+                {r === session?.activeRole && <Check size={16} color={accentColors[accentForRole(r)].base} />}
               </Pressable>
             ))}
           </View>

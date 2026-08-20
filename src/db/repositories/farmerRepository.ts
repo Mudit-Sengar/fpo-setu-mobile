@@ -1,5 +1,5 @@
 import { withDb } from "../connection";
-import type { Farmer, FarmerBuyerMatch, FarmerTxn, SimilarFarmer } from "../types";
+import type { Farmer, FarmerTxn } from "../types";
 
 /** Farmers, their transactions, and the farmer-side match/discovery lists. */
 
@@ -25,6 +25,12 @@ async function hydrateFarmer(r: Record<string, unknown>): Promise<Farmer> {
       .map((x) => String(x.crop));
     const txns = ((await db.execute("SELECT * FROM farmer_txns WHERE farmer_id = ? ORDER BY id;", [id])).rows ?? [])
       .map(toTxn);
+    // FPO membership comes from `memberships`, not the retired `farmers.fpo_id`
+    // column: belonging is now a row with a status and a history, and reading it
+    // from one place is what keeps an approval visible everywhere at once.
+    const membership = ((await db.execute(
+      `SELECT fpo_id, share_pct, joined_at FROM memberships
+        WHERE farmer_id = ? AND status = 'active' LIMIT 1;`, [id])).rows ?? [])[0];
 
     return {
       id,
@@ -33,9 +39,11 @@ async function hydrateFarmer(r: Record<string, unknown>): Promise<Farmer> {
       district: String(r.district ?? ""),
       landAcres: Number(r.land_acres ?? 0),
       crops,
-      fpoId: r.fpo_id == null ? null : String(r.fpo_id),
-      sharePct: Number(r.share_pct ?? 0),
-      memberSince: r.member_since == null ? undefined : String(r.member_since),
+      fpoId: membership == null ? null : String(membership.fpo_id),
+      sharePct: membership == null ? 0 : Number(membership.share_pct ?? 0),
+      memberSince: membership?.joined_at == null
+        ? (r.member_since == null ? undefined : String(r.member_since))
+        : String(membership.joined_at),
       txns,
     };
   });
@@ -77,35 +85,56 @@ export async function getFarmerProfileExtras(id: string): Promise<FarmerProfileE
   });
 }
 
-export async function listFarmerBuyerMatches(): Promise<FarmerBuyerMatch[]> {
-  return withDb("listFarmerBuyerMatches", async (db) => {
-    const rows = (await db.execute("SELECT * FROM farmer_buyer_matches;")).rows ?? [];
-    return rows.map((r) => ({
-      id: String(r.id),
-      buyer: String(r.buyer),
-      crop: String(r.crop ?? ""),
-      grade: String(r.grade ?? ""),
-      qty: String(r.qty ?? ""),
-      window: String(r.window ?? ""),
-      location: String(r.location ?? ""),
-      distanceKm: Number(r.distance_km ?? 0),
-    }));
-  });
+
+/** A farmer growing the same crop, with the party id needed to connect to them. */
+export interface PeerFarmer {
+  id: string;
+  partyId: number;
+  name: string;
+  village: string;
+  district: string;
+  landAcres: number;
+  crops: string[];
 }
 
-export async function listSimilarFarmers(): Promise<SimilarFarmer[]> {
-  return withDb("listSimilarFarmers", async (db) => {
-    const rows = (await db.execute("SELECT * FROM similar_farmers;")).rows ?? [];
-    return rows.map((r) => ({
-      id: String(r.id),
-      name: String(r.name),
-      village: String(r.village ?? ""),
-      district: String(r.district ?? ""),
-      crop: String(r.crop ?? ""),
-      grade: String(r.grade ?? ""),
-      quality: String(r.quality ?? ""),
-      landAcres: Number(r.land_acres ?? 0),
-      distanceKm: Number(r.distance_km ?? 0),
+/**
+ * Other farmers growing a given crop.
+ *
+ * Replaces `listSimilarFarmers`, which returned six invented people with no party
+ * and therefore nobody to send a connection request to. These are real rows: the
+ * seeded peers were promoted into `farmers` (see src/db/parties.ts), so every one
+ * of them has a party and can receive a request and a message.
+ *
+ * The old `grade` and `quality` filters are gone with that table. They described
+ * produce rather than a person, and belong on a supply posting.
+ */
+export async function listPeerFarmers(
+  crop: string, excludeFarmerId: string | null, district: string | null,
+): Promise<PeerFarmer[]> {
+  return withDb("listPeerFarmers", async (db) => {
+    const rows = (await db.execute(
+      `SELECT f.id, f.name, f.village, f.district, f.land_acres, p.id AS party_id
+         FROM farmers f
+         JOIN farmer_crops fc ON fc.farmer_id = f.id
+         JOIN parties p ON p.kind = 'farmer' AND p.entity_id = f.id AND p.is_active = 1
+        WHERE LOWER(fc.crop) = LOWER(?) AND f.id <> ?
+        ORDER BY CASE WHEN f.district = ? THEN 0 ELSE 1 END, f.name;`,
+      [crop, excludeFarmerId ?? "", district ?? ""])).rows ?? [];
+
+    return Promise.all(rows.map(async (r) => {
+      const id = String(r.id);
+      const crops = ((await db.execute(
+        "SELECT crop FROM farmer_crops WHERE farmer_id = ?;", [id])).rows ?? [])
+        .map((x) => String(x.crop));
+      return {
+        id,
+        partyId: Number(r.party_id),
+        name: String(r.name),
+        village: String(r.village ?? ""),
+        district: String(r.district ?? ""),
+        landAcres: Number(r.land_acres ?? 0),
+        crops,
+      };
     }));
   });
 }

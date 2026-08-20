@@ -6,14 +6,17 @@ import {
   ListOrdered, MapPin, Sprout, TrendingUp, Users,
 } from "lucide-react-native";
 import { useSessionFarmer } from "../../lib/useSessionProfile";
-import { fpoRepo, marketRepo } from "../../db";
+import { fpoRepo, marketRepo, membershipRepo } from "../../db";
+import { describeWriteError } from "../../db/authz";
+import type { MembershipRow } from "../../db/repositories/membershipRepository";
+import { useApp } from "../../lib/app-state";
 import { useDbQuery } from "../../db/useDbQuery";
 import type { FPO, FpoMonthlySummary } from "../../db/types";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import {
   Button, Card, CardContent, CardHeader, CardTitle, Field, Input,
-  Muted, Select, Stat, Table, Text, toast,
+  Badge, Muted, Select, Stat, Table, Text, toast,
 } from "../../components/ui";
 import { EmptyHint, Meta, SectionCard, SectionCardRow, Segmented } from "../../components/common";
 import { useFarmerBack } from "../../hooks/useFarmerBack";
@@ -77,7 +80,7 @@ function MarketInsights() {
     if (crop === "" && cropOptions.length > 0) setCrop(cropOptions[0]);
   }, [crop, cropOptions]);
 
-  const [series] = useDbQuery<{ date: string; price: number }[]>(
+  const series = useDbQuery<{ date: string; price: number }[]>(
     () => (crop === "" ? Promise.resolve([]) : marketRepo.getDailyPrices(crop)),
     [crop], [],
   );
@@ -213,11 +216,11 @@ function MarketInsights() {
 
 function MyFpoDetails() {
   const farmer = useSessionFarmer();
-  const [fpo] = useDbQuery<FPO | null>(
+  const fpo = useDbQuery<FPO | null>(
     () => (farmer?.fpoId != null ? fpoRepo.getFpoById(farmer.fpoId) : Promise.resolve(null)),
     [farmer?.fpoId], null);
   // Was hardcoded locals; now a per-FPO row in fpo_monthly_summary.
-  const [summary] = useDbQuery<FpoMonthlySummary | null>(
+  const summary = useDbQuery<FpoMonthlySummary | null>(
     () => (fpo != null ? fpoRepo.getMonthlySummary(fpo.id) : Promise.resolve(null)),
     [fpo?.id], null);
   const [open, setOpen] = useState(false);
@@ -308,7 +311,9 @@ function MyFpoDetails() {
 
 function NearbyFpos() {
   const farmer = useSessionFarmer();
-  const [fpos] = useDbQuery<FPO[]>(() => fpoRepo.listFpos(), [], []);
+  const fpos = useDbQuery<FPO[]>(() => fpoRepo.listFpos(), [], []);
+  const memberships = useDbQuery<MembershipRow[]>(
+    () => membershipRepo.listFarmerMemberships(farmer?.id ?? null), [farmer?.id], []);
   const recommended = useMemo(
     () => (farmer == null ? [] : fpos.filter(
       (f) => f.district === farmer.district || f.commodities.some((c) => farmer.crops.includes(c)),
@@ -317,29 +322,53 @@ function NearbyFpos() {
   );
   const [openFor, setOpenFor] = useState<string | null>(null);
 
+  /** The farmer's standing with one FPO, so the card can say what happened. */
+  const standingWith = (fpoId: string) =>
+    memberships.find((m) => m.fpoId === fpoId && m.status !== "rejected" && m.status !== "exited");
+  const belongsSomewhere = memberships.some((m) => m.status === "active");
+
   return (
     <>
       <Text size="lg" weight="700">Nearby FPOs recommended for you</Text>
-      {recommended.map((fpo, idx) => {
-        const dist = 4 + idx * 6;
+      {recommended.map((fpo) => {
+        const standing = standingWith(fpo.id);
         return (
           <Card key={fpo.id}>
             <CardContent style={{ paddingTop: spacing.lg }}>
               {/* Tier badge and the "+X% vs APMC" stat were removed; the title
-                  now spans the full width and the meta list is a single column. */}
-              <Text size="base" weight="700">{fpo.name}</Text>
+                  now spans the full width and the meta list is a single column.
+                  The invented "4 + idx * 6 km" distance went with them — it was
+                  computed from the list position. */}
+              <View style={s.cardHead}>
+                <Text size="base" weight="700" style={{ flex: 1 }}>{fpo.name}</Text>
+                {standing?.status === "pending" && <Badge color="#ffffff" bg={colors.accent}>Applied</Badge>}
+                {standing?.status === "active" && <Badge color="#ffffff" bg={colors.farmer}>Member</Badge>}
+              </View>
               <Muted style={{ marginTop: 2 }}>{fpo.tagline}</Muted>
 
               <View style={s.metaList}>
-                <Meta icon={<MapPin size={13} color={colors.mutedForeground} />} label={`${dist} km · ${fpo.block}, ${fpo.district}`} />
+                <Meta icon={<MapPin size={13} color={colors.mutedForeground} />} label={`${fpo.block}, ${fpo.district}`} />
                 <Meta icon={<Users size={13} color={colors.mutedForeground} />} label={`${fpo.members} members`} />
                 <Meta icon={<Sprout size={13} color={colors.mutedForeground} />} label={fpo.commodities.join(", ")} />
               </View>
 
-              <Button full accent={colors.farmer} onPress={() => setOpenFor(fpo.id)} style={{ marginTop: spacing.md }}>
-                Apply for Membership
-              </Button>
-              {openFor === fpo.id && <ApplyForm fpoName={fpo.name} onDone={() => setOpenFor(null)} />}
+              {standing?.status === "pending" && (
+                <Muted style={{ marginTop: spacing.md }}>
+                  Application sent. The FPO will approve or decline it.
+                </Muted>
+              )}
+              {standing?.status === "active" && (
+                <Muted style={{ marginTop: spacing.md }}>You are a member of this FPO.</Muted>
+              )}
+              {standing == null && (
+                <Button full accent={colors.farmer} disabled={belongsSomewhere}
+                  onPress={() => setOpenFor(fpo.id)} style={{ marginTop: spacing.md }}>
+                  {belongsSomewhere ? "Already in an FPO" : "Apply for Membership"}
+                </Button>
+              )}
+              {openFor === fpo.id && (
+                <ApplyForm fpo={fpo} farmer={farmer} onDone={() => setOpenFor(null)} />
+              )}
             </CardContent>
           </Card>
         );
@@ -348,25 +377,60 @@ function NearbyFpos() {
   );
 }
 
-function ApplyForm({ fpoName, onDone }: { fpoName: string; onDone: () => void }) {
-  const [name, setName] = useState("");
+/**
+ * The membership application.
+ *
+ * Every field used to be discarded on submit. The form now prefills from the
+ * farmer's own record — they are applying as themselves, not filling in a
+ * stranger's details — and corrections update their profile, while the mobile
+ * number and note stay on the membership as details given to this FPO.
+ */
+function ApplyForm({
+  fpo, farmer, onDone,
+}: { fpo: FPO; farmer: ReturnType<typeof useSessionFarmer>; onDone: () => void }) {
+  const { session } = useApp();
   const [mobile, setMobile] = useState("");
-  const [village, setVillage] = useState("");
-  const [land, setLand] = useState("");
-  const [crops, setCrops] = useState("");
+  const [village, setVillage] = useState(farmer?.village ?? "");
+  const [land, setLand] = useState(farmer?.landAcres != null ? String(farmer.landAcres) : "");
+  const [crops, setCrops] = useState((farmer?.crops ?? []).join(", "));
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await membershipRepo.apply(session, {
+        fpoId: fpo.id,
+        note: note.trim() === "" ? null : note.trim(),
+        contactPhone: mobile.trim() === "" ? null : mobile.trim(),
+        village: village.trim(),
+        landAcres: Number(land) || null,
+        crops: crops.split(",").map((c) => c.trim()).filter((c) => c.length > 0),
+      });
+      toast.success(`Application sent to ${fpo.name}. They will approve or decline it.`);
+      onDone();
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not send that application."));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <View style={s.inlineForm}>
-      <Field label="Name"><Input value={name} onChangeText={setName} placeholder="Suresh Patil" /></Field>
+      <Muted style={{ marginBottom: spacing.sm }}>
+        {`Applying as ${farmer?.name ?? "you"}. Corrections here update your profile.`}
+      </Muted>
       <Field label="Mobile"><Input value={mobile} onChangeText={setMobile} placeholder="9876xxxxxx" keyboardType="phone-pad" /></Field>
       <Field label="Village"><Input value={village} onChangeText={setVillage} placeholder="Kotul" /></Field>
       <Field label="Landholding (acres)"><Input value={land} onChangeText={setLand} placeholder="3.2" keyboardType="numeric" /></Field>
       <Field label="Crops"><Input value={crops} onChangeText={setCrops} placeholder="Onion, Tomato" /></Field>
+      <Field label="Anything to add"><Input value={note} onChangeText={setNote} multiline numberOfLines={2} /></Field>
       <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: spacing.sm }}>
         <Button variant="ghost" size="sm" onPress={onDone}>Cancel</Button>
-        <Button size="sm" accent={colors.farmer}
-          onPress={() => { toast.success(`Application submitted to ${fpoName}.`); onDone(); }}>
-          Submit
+        <Button size="sm" accent={colors.farmer} disabled={busy} onPress={submit}>
+          {busy ? "Sending…" : "Submit"}
         </Button>
       </View>
     </View>
@@ -400,6 +464,7 @@ const s = StyleSheet.create({
   statGrid: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
   /** Single-column meta list — the 2x2 grid looked sparse once the stat was removed. */
   metaList: { gap: 8, marginTop: spacing.md },
+  cardHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   inlineForm: {
     borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
     backgroundColor: colors.mutedBg, padding: spacing.md, marginTop: spacing.md,

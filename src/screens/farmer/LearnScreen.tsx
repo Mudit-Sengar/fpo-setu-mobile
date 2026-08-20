@@ -23,8 +23,8 @@ export function LearnScreen() {
   const [tab, setTab] = useState<null | "courses" | "stories">(null);
   const [open, setOpen] = useState<V | null>(null);
 
-  const [courseRows] = useDbQuery(() => contentRepo.listCourses("farmer"), [], []);
-  const [storyRows] = useDbQuery(() => contentRepo.listStories(), [], []);
+  const courseRows = useDbQuery(() => contentRepo.listCourses("farmer"), [], []);
+  const storyRows = useDbQuery(() => contentRepo.listStories(), [], []);
 
   const courses: V[] = courseRows.map((c) => ({
     title: c.name,

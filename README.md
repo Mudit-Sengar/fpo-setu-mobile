@@ -76,7 +76,9 @@ Root Navigator (RootStack)
 - Persists user role, language preference, and active FPO ID to AsyncStorage
 - Provides `useApp()` hook for global access to `role`, `lang`, `login()`, `logout()`, `t()`
 - Hydrates on app start; `ready` indicates storage has been read
-- Storage keys: `setu.role`, `setu.lang`, `setu.fpo`
+- Storage keys: `setu.lang`, `setu.session`
+- The active FPO is **not** stored. It is derived from the authenticated session,
+  so an FPO login can only ever read and write its own organisation.
 
 ### Role-Based Profiles
 
@@ -124,7 +126,7 @@ Three core roles with distinct features:
 - **Not persisted**: survives app session only; data is read-only seed data
 
 ### AsyncStorage Persistence (react-native-async-storage)
-- **Global app state**: role, language, active FPO ID (keys: `setu.role`, `setu.lang`, `setu.fpo`)
+- **Global app state**: language and the session `{userId, activeRole}` (keys: `setu.lang`, `setu.session`). The active FPO is derived from the session, not stored.
 - **Buyer demands**: user-created procurement orders (key: `setu.demands`)
 - **Buyer supplies**: supplier-mode postings (key: `setu.supplies`)
 - See src/lib/buyer-storage.ts for load/save helpers
@@ -738,12 +740,20 @@ FPO Setu uses **database-backed authentication** with SQLite, eliminating the mo
 
 **Seeded Test Accounts** (pre-populated in the database):
 
-| Email | Password | Role | Notes |
-|-------|----------|------|-------|
-| `farmer01@setu.local` | `test123` | Farmer | Demo farmer account |
-| `fpo01@setu.local` | `test123` | FPO Manager | Demo FPO account |
-| `buyer01@setu.local` | `test123` | Buyer | Demo buyer account |
-| `admin01@setu.local` | `test123` | Admin | Can switch roles without logout |
+Sign-in takes a **username** (not an email), a password, and the role whose view to open.
+
+| Username | Password | Role | Linked profile |
+|----------|----------|------|----------------|
+| `farmer01` | `farmer` | Farmer | `MH-AH-2024-00831` (Suresh Patil) |
+| `fpo01` | `fpo` | FPO | `fpo-1` (Samruddha Adivasi Agro) |
+| `buyer01` | `buyer` | Buyer | `b-1` (Sahyadri Foods) |
+| `supplier01` | `supplier` | Supplier | `s-1` (Mahabeej Seeds) |
+| `admin01` | `admin` | Admin | All four; can switch views without logout |
+
+An account with no profile linked for the role it is opening **cannot sign in** —
+it fails with "No … profile is linked to this account." There is deliberately no
+fallback to the first record in the table, because that meant an unlinked account
+silently acted as `fpo-1`.
 
 ### How It Works
 
@@ -964,17 +974,40 @@ User authentication and role management:
 - `user_id INT FOREIGN KEY`, `role_id INT FOREIGN KEY`
 - Junction table: each user can have multiple roles
 
-**farmer_profiles**
-- `user_id INT FOREIGN KEY`, `farmer_id TEXT FOREIGN KEY`
-- Links a login to a farmer record
+**farmer_profiles / fpo_profiles / buyer_profiles**
+- One table per role, each linking a login to one domain record
+- **Replaced by `user_profiles` in migration 003** — see below. These tables are
+  copied across and dropped during that migration.
 
-**fpo_profiles**
-- `user_id INT FOREIGN KEY`, `fpo_id TEXT FOREIGN KEY`
-- Links a login to an FPO record
+### Migration 003: Parties
 
-**buyer_profiles**
-- `user_id INT FOREIGN KEY`, `buyer_id TEXT FOREIGN KEY`
-- Links a login to a buyer record
+Introduces the supertype that lets one persona's action reference another.
+
+**parties**
+- `id INTEGER PRIMARY KEY`, `kind TEXT` (farmer/fpo/buyer/supplier/service_provider)
+- `entity_id TEXT` — the natural key of the owning record, `UNIQUE (kind, entity_id)`
+- `is_active INT`
+- Farmers, FPOs, buyers and suppliers have unrelated id formats, so nothing could
+  express "A acted on B". `parties` is that common key. Names are deliberately not
+  copied here — the `v_parties` view resolves them from the owning entity.
+
+**v_parties** (view)
+- `party_id, kind, entity_id, name, locality, state` across all five kinds
+
+**user_profiles**
+- `user_id INT FK`, `role_code TEXT FK roles(code)`, `party_id INT FK parties(id)`
+- `PRIMARY KEY (user_id, role_code)` — at most one profile per login per role
+- Replaces the three `*_profiles` tables, and is what allows `supplier` to be a
+  real role rather than a UI toggle
+
+**service_providers**
+- `id TEXT PRIMARY KEY`, `name`, `provider_type` (lender/logistics/compliance/expert/mentor)
+- `org, specialisation, phone, email, location, fee_note, eligibility_note, product_note, note`
+- Folds the five ID-less directories into one entity that can hold a party row,
+  so a service request has something to point at
+
+**roles**
+- Migration 003 adds the `supplier` role and re-sorts `admin` after it
 
 ---
 

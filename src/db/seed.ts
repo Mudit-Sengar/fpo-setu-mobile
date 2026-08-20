@@ -1,7 +1,7 @@
 import type { DB } from "@op-engineering/op-sqlite";
 import {
   BUYERS, COMPLIANCE_EXPLAINER, COMPLIANCE_PARTNERS, DAILY_APMC_PRICES, EXPERTS,
-  FARMER_BUYER_MATCHES, FARMER_COURSES, FARMER_SCHEMES, FARMERS, FPO_CUMULATIVE,
+  FARMER_COURSES, FARMER_SCHEMES, FARMERS, FPO_CUMULATIVE,
   FPO_MEETINGS, FPOS, GOVT_SCHEMES, INPUT_NEEDS, LEDGER, LENDERS, LOGISTICS_PROVIDERS,
   MEMBER_ENGAGEMENT, MENTORS, MGMT_COURSES, PRICE_HISTORY, SELLER_FEEDBACK,
   SIMILAR_FARMERS, SUPPLIER_POSTINGS, SUPPLIERS, TIER_SCORES, VALUE_COURSES,
@@ -298,19 +298,19 @@ export async function seedIfEmpty(db: DB): Promise<void> {
     for (const p of PRICE_HISTORY) {
       await run(`INSERT INTO price_history (month, fpo, apmc) VALUES (?,?,?);`, [p.month, p.fpo, p.apmc]);
     }
-    for (const m of FARMER_BUYER_MATCHES) {
-      await run(
-        `INSERT INTO farmer_buyer_matches (id, buyer, crop, grade, qty, window, location, distance_km)
-         VALUES (?,?,?,?,?,?,?,?);`,
-        [m.id, m.buyer, m.crop, m.grade, m.qty, m.window, m.location, m.distanceKm],
-      );
-    }
+    // The peer farmers seed as ordinary farmers. They used to go into a separate
+    // `similar_farmers` display table, which meant they had no party and could
+    // never receive a connection request or a message — see migration 010, which
+    // promotes them on an existing install and then drops that table.
     for (const f of SIMILAR_FARMERS) {
       await run(
-        `INSERT INTO similar_farmers (id, name, village, district, crop, grade, quality, land_acres, distance_km)
-         VALUES (?,?,?,?,?,?,?,?,?);`,
-        [f.id, f.name, f.village, f.district, f.crop, f.grade, f.quality, f.landAcres, f.distanceKm],
+        `INSERT OR IGNORE INTO farmers (id, name, village, district, land_acres, state)
+         VALUES (?,?,?,?,?,'Maharashtra');`,
+        [f.id, f.name, f.village, f.district, f.landAcres],
       );
+      if (f.crop) {
+        await run("INSERT OR IGNORE INTO farmer_crops (farmer_id, crop) VALUES (?,?);", [f.id, f.crop]);
+      }
     }
 
     /* ------------------------------------------------------------- Lookups */

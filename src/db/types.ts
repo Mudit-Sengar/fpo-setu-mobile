@@ -11,7 +11,6 @@ export type {
   BuyerType,
   CourseItem,
   Farmer,
-  FarmerBuyerMatch,
   FarmerScheme,
   FarmerTxn,
   FPO,
@@ -19,12 +18,10 @@ export type {
   FpoMeeting,
   FPOSupply,
   InputNeed,
-  LedgerEntry,
   MemberEngagement,
   Mentor,
   OpportunityDetail,
   Scheme,
-  SimilarFarmer,
   Supplier,
   SupplyPosting,
   Thumb,
@@ -78,6 +75,27 @@ export interface FpoMonthlySummary {
   sellPrice: number;
   onwardPrice: number;
   fpoProfit: number;
+}
+
+/**
+ * A row in an FPO's books.
+ *
+ * `counterpartyPartyId` replaces the free-text `counterpartyId`, which held a
+ * farmer id, a buyer id or a literal like 'FPO-POOL' depending on the row.
+ * `counterpartyLabel` carries the cases that genuinely name no party.
+ */
+export interface LedgerEntry {
+  date: string;
+  desc: string;
+  type: "Income" | "Expense";
+  amount: number;
+  balance: number;
+  counterpartyPartyId?: number | null;
+  counterpartyLabel?: string | null;
+  /** Resolved for display; empty when the counterparty is a label. */
+  counterpartyName?: string;
+  orderId?: number | null;
+  refId?: string;
 }
 
 /** Kinds stored in the `lookup_values` table. */

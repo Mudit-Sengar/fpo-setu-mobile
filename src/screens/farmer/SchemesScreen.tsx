@@ -26,7 +26,7 @@ export function SchemesScreen() {
   const goBack = useFarmerBack();
   const [filter, setFilter] = useState<Filter>("all");
 
-  const [list] = useDbQuery<FarmerScheme[]>(
+  const list = useDbQuery<FarmerScheme[]>(
     () => contentRepo.listFarmerSchemes(filter === "all" ? undefined : filter),
     [filter], [],
   );

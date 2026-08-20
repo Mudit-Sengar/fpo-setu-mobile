@@ -9,7 +9,8 @@ import { useDbQuery } from "../../db/useDbQuery";
 import type { FPO } from "../../db/types";
 import { colors, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
-import { Muted, Text } from "../../components/ui";
+import { Badge, Muted, Text } from "../../components/ui";
+import { useUnreadCount } from "../../features/connections";
 import { Tile } from "../../components/common";
 import type { FpoStackParamList } from "../../navigation/types";
 
@@ -17,8 +18,9 @@ import type { FpoStackParamList } from "../../navigation/types";
 export function FpoHomeScreen() {
   const nav = useNavigation<NativeStackNavigationProp<FpoStackParamList>>();
   const { activeFpoId } = useApp();
-  const [fpo] = useDbQuery<FPO | null>(() => fpoRepo.getFpoById(activeFpoId), [activeFpoId], null);
+  const fpo = useDbQuery<FPO | null>(() => fpoRepo.getFpoById(activeFpoId), [activeFpoId], null);
   const fpoName = fpo?.name ?? "";
+  const unread = useUnreadCount();
 
   const GROUPS = [
     { to: "FpoManage" as const, title: "Manage & Grow", icon: <Briefcase size={26} color={colors.fpo} /> },
@@ -52,6 +54,17 @@ export function FpoHomeScreen() {
         ))}
       </View>
 
+      {unread > 0 && (
+        <View style={s.notice}>
+          <Badge color={colors.fpoForeground} bg={colors.fpo}>
+            {`${unread} new ${unread === 1 ? "update" : "updates"}`}
+          </Badge>
+          <Muted style={{ flex: 1 }}>
+            Replies and connection requests are waiting in Find Partners → Inbox.
+          </Muted>
+        </View>
+      )}
+
       <Muted center>Need help finding a screen? Tap the assistant button in the bottom-right.</Muted>
     </RoleShell>
   );
@@ -60,4 +73,8 @@ export function FpoHomeScreen() {
 const s = StyleSheet.create({
   headerBand: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   tiles: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md },
+  notice: {
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
+    backgroundColor: colors.fpoSoft, borderRadius: 10, padding: spacing.md,
+  },
 });

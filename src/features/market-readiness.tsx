@@ -1,9 +1,9 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import {
-  AlertTriangle, ArrowRight, Boxes, Building2, CalendarRange, CheckCircle2,
+  AlertTriangle, ArrowRight, Boxes, Building2, CalendarRange,
   ChevronRight, FileText, PackageCheck, ScrollText, ShieldCheck, Sparkles,
-  TrendingUp, Upload, Warehouse, XCircle,
+  TrendingUp, Warehouse, XCircle,
 } from "lucide-react-native";
 import { colors, radius, spacing } from "../theme";
 import {
@@ -11,6 +11,12 @@ import {
   Field, Muted, Progress, Select, Text, toast,
 } from "../components/ui";
 import { BackLink } from "../components/common";
+import { marketRepo, networkRepo, readinessRepo, serviceRepo } from "../db";
+import { describeWriteError } from "../db/authz";
+import type { Assessment } from "../db/repositories/readinessRepository";
+import { useDbQuery } from "../db/useDbQuery";
+import { useApp } from "../lib/app-state";
+import type { Buyer } from "../db/types";
 
 /** Ported from the web app's src/components/market-readiness.tsx */
 
@@ -193,12 +199,11 @@ export function MarketReadinessHubSection() {
                     </View>
                   ))
                 )}
+                {/* There is no contract file to download — the terms above are the
+                    whole of it. Asking a compliance provider to draft one against
+                    this buyer's terms is the thing a user actually wanted. */}
                 {c.id === "contract" && (
-                  <Button variant="outline" size="sm" accent={colors.fpo} style={{ marginTop: spacing.sm }}
-                    icon={<FileText size={13} color={colors.fpo} />}
-                    onPress={() => toast.success("Sample contract download started.")}>
-                    Download Sample Contract
-                  </Button>
+                  <RequestContractButton buyerName={buyer} />
                 )}
               </Accordion>
             ))}
@@ -209,6 +214,45 @@ export function MarketReadinessHubSection() {
   );
 }
 
+/**
+ * Asks a compliance provider to draft a contract against this buyer's terms.
+ *
+ * Replaces a "Download Sample Contract" button that started no download — there
+ * has never been a file. The terms are already listed above it; what was missing
+ * was a way to get one drawn up.
+ */
+function RequestContractButton({ buyerName }: { buyerName: string }) {
+  const { session } = useApp();
+  const providers = useDbQuery(() => serviceRepo.listProviders("compliance"), [], []);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <Button variant="outline" size="sm" accent={colors.fpo} style={{ marginTop: spacing.sm }}
+      icon={<FileText size={13} color={colors.fpo} />}
+      disabled={busy || providers.length === 0}
+      onPress={async () => {
+        const provider = providers[0];
+        if (provider == null) return;
+        setBusy(true);
+        try {
+          await serviceRepo.request(session, {
+            providerPartyId: provider.partyId,
+            serviceType: "contract",
+            subject: `Contract template for supplying ${buyerName}`,
+            details: "Quantity commitment, quality parameters, price discovery, payment terms, penalties.",
+          });
+          toast.success(`Requested from ${provider.name}.`);
+        } catch (e) {
+          toast.error(describeWriteError(e, "Could not send that request."));
+        } finally {
+          setBusy(false);
+        }
+      }}>
+      {providers.length === 0 ? "No compliance partners listed" : "Request a contract template"}
+    </Button>
+  );
+}
+
 /* ============================================================
    MARKET-LINKED GROWTH PLANNING  (Expansion Planner Tab B)
    ============================================================ */
@@ -216,13 +260,64 @@ export function MarketReadinessHubSection() {
 type Stage = "select" | "summary" | "improve";
 type Step = 1 | 2 | 3;
 
+/**
+ * Market-Linked Growth Planning.
+ *
+ * Every number on this screen used to be a constant: a readiness score of 62%,
+ * three named missing requirements, and an investment total of ₹2.25 Lakhs —
+ * identical for every FPO and every buyer, so choosing a different buyer changed
+ * nothing but a label. The score is now the share of that buyer's stated
+ * requirements this FPO meets, and the gaps are the ones it does not.
+ *
+ * The buyer list is the real `buyers` table rather than eleven hardcoded brand
+ * names, because a requirement can only be compared against if somebody stated it.
+ */
 export function MarketLinkedGrowthPlanning() {
+  const { session, activeFpoId } = useApp();
+  const buyers = useDbQuery<Buyer[]>(() => marketRepo.listBuyers(), [], []);
   const [stage, setStage] = useState<Stage>("select");
-  const [buyer, setBuyer] = useState<string>("ITC");
-  const [crop, setCrop] = useState<string>("Maize");
+  const [buyerId, setBuyerId] = useState<string>("");
+  const [crop, setCrop] = useState<string>(CROP_OPTIONS[2]);
   const [step, setStep] = useState<Step>(1);
-  const [uploaded, setUploaded] = useState<Record<string, boolean>>({});
-  const [assessed, setAssessed] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (buyerId === "" && buyers.length > 0) setBuyerId(buyers[0].id);
+  }, [buyers, buyerId]);
+
+  const buyer = buyers.find((b) => b.id === buyerId) ?? null;
+  const buyerName = buyer?.name ?? "";
+
+  const assessment = useDbQuery<Assessment | null>(
+    () => (buyerId === "" || activeFpoId === ""
+      ? Promise.resolve(null)
+      : readinessRepo.assess(activeFpoId, buyerId, crop)),
+    [activeFpoId, buyerId, crop],
+    null,
+  );
+
+  async function connectToBuyer() {
+    if (buyer == null || busy) return;
+    setBusy(true);
+    try {
+      const partyId = await networkRepo.partyIdFor("buyer", buyer.id);
+      if (partyId == null) {
+        toast.error("That buyer is not reachable yet.");
+        return;
+      }
+      await networkRepo.requestConnection(session, {
+        otherPartyId: partyId,
+        relationType: "trade",
+        message: `We are working towards supplying ${crop} to you. Current readiness: ${assessment?.score ?? 0}%.`,
+        openThread: true,
+      });
+      toast.success(`Connection request sent to ${buyer.name}.`);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not send that request."));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   if (stage === "select") {
     return (
@@ -233,12 +328,14 @@ export function MarketLinkedGrowthPlanning() {
         </CardHeader>
         <CardContent>
           <Field label="Which buyer do you want to supply?">
-            <Select value={buyer} options={BUYER_OPTIONS} onChange={(v) => setBuyer(v)} />
+            <Select value={buyerId} options={buyers.map((b) => b.id)} onChange={setBuyerId}
+              labelOf={(id) => buyers.find((b) => b.id === id)?.name ?? id} />
           </Field>
           <Field label="Which crop?">
             <Select value={crop} options={CROP_OPTIONS} onChange={(v) => setCrop(v)} />
           </Field>
-          <Button full size="lg" accent={colors.fpo} onPress={() => setStage("summary")}>
+          <Button full size="lg" accent={colors.fpo} disabled={buyerId === ""}
+            onPress={() => { setStage("summary"); void readinessRepo.saveAssessment(session, buyerId, crop, assessment ?? { score: 0, estInvestment: 0, gaps: [], buyerName, crop, requirementCount: 0 }).catch(() => {}); }}>
             Check My Readiness
           </Button>
         </CardContent>
@@ -246,12 +343,37 @@ export function MarketLinkedGrowthPlanning() {
     );
   }
 
-  if (stage === "summary") {
-    // Hardcoded score — same as the web prototype.
-    const score = 62;
-    const color = score >= 75 ? "#10B981" : score >= 50 ? "#F59E0B" : "#F43F5E";
-    const badge = score >= 75 ? "🟢" : score >= 50 ? "🟡" : "🔴";
+  // Nothing to measure against: this buyer has published no requirements. Saying
+  // so is more useful than showing a score computed from an empty checklist.
+  if (assessment == null || assessment.requirementCount === 0) {
+    return (
+      <>
+        <BackLink label="Change buyer or crop" onPress={() => setStage("select")}
+          icon={<ArrowRight size={14} color={colors.mutedForeground} style={{ transform: [{ rotate: "180deg" }] }} />} />
+        <Card>
+          <CardHeader><CardTitle>{`${buyerName} has not published requirements`}</CardTitle></CardHeader>
+          <CardContent>
+            <Muted>
+              Readiness is measured against what a buyer says they need. This buyer has
+              not completed their requirements yet, so there is nothing to score against.
+            </Muted>
+            <Button full accent={colors.fpo} style={{ marginTop: spacing.md }}
+              disabled={busy} onPress={connectToBuyer}>
+              {`Ask ${buyerName} what they need`}
+            </Button>
+          </CardContent>
+        </Card>
+      </>
+    );
+  }
 
+  const met = assessment.gaps.filter((g) => g.status === "met");
+  const missing = assessment.gaps.filter((g) => g.status !== "met");
+  const score = assessment.score;
+  const color = score >= 75 ? "#10B981" : score >= 50 ? "#F59E0B" : "#F43F5E";
+  const badge = score >= 75 ? "🟢" : score >= 50 ? "🟡" : "🔴";
+
+  if (stage === "summary") {
     return (
       <>
         <BackLink label="Change buyer or crop" onPress={() => setStage("select")}
@@ -265,10 +387,10 @@ export function MarketLinkedGrowthPlanning() {
             </View>
           </CardHeader>
           <CardContent>
-            <Kv k="Target Buyer" v={buyer} />
+            <Kv k="Target Buyer" v={buyerName} />
             <Kv k="Commodity" v={crop} />
-            <Kv k="Potential Value" v="₹1.8 Cr / year" />
-            <Kv k="Procurement Window" v="Oct – Jan" />
+            <Kv k="Their volume" v={buyer == null ? "—" : `${buyer.typicalVolumeMT} MT / year`} />
+            <Kv k="Procurement Window" v={buyer?.procurementWindow ?? "—"} />
           </CardContent>
         </Card>
 
@@ -282,7 +404,9 @@ export function MarketLinkedGrowthPlanning() {
           <CardContent>
             <Text size="sm" weight="700" noTranslate>{`${badge} ${score}% Ready`}</Text>
             <Progress value={score} color={color} height={12} />
-            <Muted>You&apos;re on your way — a few improvements will make you buyer-ready.</Muted>
+            <Muted>
+              {`${met.length} of ${assessment.requirementCount} requirements met.`}
+            </Muted>
           </CardContent>
         </Card>
 
@@ -290,14 +414,18 @@ export function MarketLinkedGrowthPlanning() {
           <CardHeader>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               <AlertTriangle size={16} color="#F43F5E" />
-              <CardTitle>Missing Requirements</CardTitle>
+              <CardTitle>{`Missing Requirements (${missing.length})`}</CardTitle>
             </View>
           </CardHeader>
           <CardContent>
-            {["Warehouse Ventilation", "Moisture Testing Equipment", "Digital Stock Records"].map((m) => (
-              <View key={m} style={s.bullet}>
+            {missing.length === 0 && <Muted>Nothing missing — you meet every stated requirement.</Muted>}
+            {missing.map((g) => (
+              <View key={g.requirement} style={s.bullet}>
                 <XCircle size={16} color="#F43F5E" />
-                <Text size="sm" style={{ flex: 1 }}>{m}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text size="sm">{g.requirement}</Text>
+                  <Muted>{`${g.category} · about ₹${g.estCost.toLocaleString("en-IN")}`}</Muted>
+                </View>
               </View>
             ))}
           </CardContent>
@@ -305,15 +433,20 @@ export function MarketLinkedGrowthPlanning() {
 
         <View style={s.investBox}>
           <Muted>Estimated Investment Required</Muted>
-          <Text size="xl" weight="700" color="#B45309">₹2.25 Lakhs</Text>
+          <Text size="xl" weight="700" color="#B45309">
+            {`₹${assessment.estInvestment.toLocaleString("en-IN")}`}
+          </Text>
+          <Muted>Indicative planning figures, not quotes.</Muted>
         </View>
 
-        <Button full size="lg" accent={colors.fpo} onPress={() => { setStage("improve"); setStep(1); }}>
-          Improve Readiness
-        </Button>
+        {missing.length > 0 && (
+          <Button full size="lg" accent={colors.fpo} onPress={() => { setStage("improve"); setStep(1); }}>
+            Improve Readiness
+          </Button>
+        )}
         <Button full size="lg" variant="outline" accent={colors.fpo}
-          onPress={() => toast.success(`Connection request sent to ${buyer}.`)}>
-          Connect with Buyer
+          disabled={busy} onPress={connectToBuyer}>
+          {`Connect with ${buyerName}`}
         </Button>
       </>
     );
@@ -350,25 +483,45 @@ export function MarketLinkedGrowthPlanning() {
         <Card>
           <CardHeader><CardTitle>Gap Assessment</CardTitle></CardHeader>
           <CardContent>
-            {[
-              { icon: "🏚", name: "Warehouse", status: "available", pct: 70 },
-              { icon: "📏", name: "Moisture Meter", status: "missing", pct: 0 },
-              { icon: "📋", name: "Inventory Management", status: "missing", pct: 0 },
-            ].map((it) => (
-              <View key={it.name} style={s.gapRow}>
+            <Muted style={{ marginBottom: spacing.sm }}>
+              {`Measured against what ${buyerName} requires. Tick an item once you have it — the score updates.`}
+            </Muted>
+            {assessment.gaps.map((g) => (
+              <View key={g.requirement} style={s.gapRow}>
                 <View style={s.rowBetween}>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
-                    <Text size="lg" noTranslate>{it.icon}</Text>
-                    <Text size="sm" weight="600">{it.name}</Text>
-                  </View>
-                  {it.status === "available"
+                  <Text size="sm" weight="600" style={{ flex: 1 }}>{g.requirement}</Text>
+                  {g.status === "met"
                     ? <Badge color="#ffffff" bg="#10B981">Available</Badge>
-                    : <Badge color="#E11D48" bg="#FFE4E6">Missing</Badge>}
+                    : g.status === "partial"
+                      ? <Badge color="#B45309" bg="#FEF3C7">Partial</Badge>
+                      : <Badge color="#E11D48" bg="#FFE4E6">Missing</Badge>}
                 </View>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.sm }}>
-                  <View style={{ flex: 1 }}><Progress value={it.pct} color={colors.fpo} /></View>
-                  <Muted>{`${it.pct}%`}</Muted>
-                </View>
+                {g.status !== "met" && g.category === "infrastructure" && (
+                  <Button size="sm" variant="outline" accent={colors.fpo} style={{ marginTop: spacing.sm }}
+                    onPress={async () => {
+                      try {
+                        await readinessRepo.setInfrastructure(session, g.requirement, true);
+                        toast.success(`${g.requirement} marked available.`);
+                      } catch (e) {
+                        toast.error(describeWriteError(e, "Could not update that."));
+                      }
+                    }}>
+                    Mark as available
+                  </Button>
+                )}
+                {g.status !== "met" && g.category === "certification" && (
+                  <Button size="sm" variant="outline" accent={colors.fpo} style={{ marginTop: spacing.sm }}
+                    onPress={async () => {
+                      try {
+                        await readinessRepo.setCertification(session, g.requirement, true);
+                        toast.success(`${g.requirement} recorded.`);
+                      } catch (e) {
+                        toast.error(describeWriteError(e, "Could not update that."));
+                      }
+                    }}>
+                    Record certification
+                  </Button>
+                )}
               </View>
             ))}
             <Button full accent={colors.fpo} onPress={() => setStep(2)}
@@ -382,77 +535,50 @@ export function MarketLinkedGrowthPlanning() {
       {step === 2 && (
         <>
           <Card>
-            <CardHeader><CardTitle>Growth Roadmap Generated</CardTitle></CardHeader>
+            <CardHeader><CardTitle>Growth Roadmap</CardTitle></CardHeader>
             <CardContent>
               <View style={s.currentState}>
                 <Text size="xxs" weight="700" color={colors.fpo} style={{ marginBottom: spacing.sm }}>CURRENT STATE</Text>
-                <Kv k="Revenue" v="₹40 Lakhs" />
-                <Kv k="Storage" v="100 MT" />
-                <Kv k="Score" v="62%" />
+                <Kv k="Requirements met" v={`${met.length} of ${assessment.requirementCount}`} />
+                <Kv k="Score" v={`${score}%`} />
+                <Kv k="To close the gaps" v={`₹${assessment.estInvestment.toLocaleString("en-IN")}`} />
               </View>
             </CardContent>
           </Card>
 
-          <PhaseCard n={1} title="Quick Wins" timeline="0–3 Months" invest="₹25,000" action="Buy Moisture Meter" jump="62% → 75%" />
-          <PhaseCard n={2} title="Infrastructure" timeline="3–6 Months" invest="₹1.5 Lakhs" action="Warehouse Upgrade" jump="75% → 91%" />
-          <PhaseCard n={3} title="Market Entry" timeline="6–9 Months" action={`Connect with ${buyer} Procurement Team`} expected="₹1.8 Crores / year" />
+          {/* Phases are the actual missing items, cheapest first — the quick wins
+              really are the quick wins rather than a fixed script. */}
+          {[...missing].sort((a, b) => a.estCost - b.estCost).slice(0, 3).map((g, i) => (
+            <PhaseCard key={g.requirement} n={i + 1}
+              title={i === 0 ? "Quick Win" : i === 1 ? "Infrastructure" : "Market Entry"}
+              timeline={i === 0 ? "0–3 Months" : i === 1 ? "3–6 Months" : "6–9 Months"}
+              invest={`₹${g.estCost.toLocaleString("en-IN")}`}
+              action={g.requirement}
+              jump={`${score}% → ${Math.min(100, Math.round(((met.length + i + 1) / assessment.requirementCount) * 100))}%`} />
+          ))}
 
           <Button full accent={colors.fpo} onPress={() => setStep(3)} icon={<ArrowRight size={16} color="#ffffff" />}>
-            Next: Verify My Readiness
+            Next: Verify
           </Button>
         </>
       )}
 
       {step === 3 && (
         <Card>
-          <CardHeader>
-            <CardTitle>Verify Your Readiness</CardTitle>
-            <Muted>Upload documents and photos to get your official Buyer Readiness score.</Muted>
-          </CardHeader>
+          <CardHeader><CardTitle>Verify</CardTitle></CardHeader>
           <CardContent>
-            {[
-              { id: "warehouse", icon: "📷", label: "Warehouse Photos" },
-              { id: "gst", icon: "📄", label: "GST Certificate" },
-              { id: "fssai", icon: "📄", label: "FSSAI License" },
-              { id: "stock", icon: "📄", label: "Storage Records" },
-              { id: "infra", icon: "📄", label: "Infrastructure Details" },
-            ].map((it) => (
-              <View key={it.id} style={s.uploadRow}>
-                <Text size="lg" noTranslate>{it.icon}</Text>
-                <Text size="sm" style={{ flex: 1 }}>{it.label}</Text>
-                {uploaded[it.id] ? (
-                  <CheckCircle2 size={20} color="#10B981" />
-                ) : (
-                  // NOTE (parity): the web app never opened a real file picker either —
-                  // this just flips local state, exactly as before.
-                  <Button size="sm" variant="outline" accent={colors.fpo}
-                    icon={<Upload size={13} color={colors.fpo} />}
-                    onPress={() => { setUploaded((u) => ({ ...u, [it.id]: true })); toast.success(`${it.label} uploaded.`); }}>
-                    Upload
-                  </Button>
-                )}
-              </View>
-            ))}
-
-            {!assessed ? (
-              <Button full accent={colors.fpo} disabled={Object.keys(uploaded).length < 3} onPress={() => setAssessed(true)}>
-                Get AI Assessment
-              </Button>
-            ) : (
-              <View style={s.assessBox}>
-                <Text size="sm" weight="700" color="#047857" noTranslate>🟢 AI Assessment Complete</Text>
-                <Text size="lg" weight="700" style={{ marginTop: spacing.sm }}>Buyer Ready</Text>
-                <View style={{ marginTop: spacing.sm }}>
-                  <Kv k="Readiness Score" v="91%" />
-                  <Kv k="Qualification Probability" v="High" />
-                </View>
-                <Button full accent={colors.fpo} style={{ marginTop: spacing.md }}
-                  icon={<ArrowRight size={16} color="#ffffff" />}
-                  onPress={() => toast.success(`Connection request sent to ${buyer}.`)}>
-                  {`Connect with ${buyer} Now`}
-                </Button>
-              </View>
-            )}
+            <Kv k="Readiness Score" v={`${score}%`} />
+            <Kv k="Requirements met" v={`${met.length} of ${assessment.requirementCount}`} />
+            <Muted style={{ marginTop: spacing.sm }}>
+              {missing.length === 0
+                ? `You meet everything ${buyerName} has asked for.`
+                : `${missing.length} requirement${missing.length === 1 ? "" : "s"} still open.`}
+            </Muted>
+            <Button full accent={colors.fpo} style={{ marginTop: spacing.md }}
+              icon={<ArrowRight size={16} color="#ffffff" />}
+              disabled={busy} onPress={connectToBuyer}>
+              {`Connect with ${buyerName}`}
+            </Button>
           </CardContent>
         </Card>
       )}

@@ -29,6 +29,7 @@ import { FpoMyScreen } from "../screens/fpo/FpoMyScreen";
 import { BuyerHomeScreen } from "../screens/buyer/BuyerHomeScreen";
 import { BuyerMatchingScreen } from "../screens/buyer/BuyerMatchingScreen";
 import { BuyerReviewsScreen } from "../screens/buyer/BuyerReviewsScreen";
+import { AdminScreen } from "../screens/admin/AdminScreen";
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const FarmerStack = createNativeStackNavigator<FarmerStackParamList>();
@@ -115,7 +116,14 @@ function FpoNavigator() {
   );
 }
 
-/** Buyer bottom tabs — mirrors the web RoleShell nav for /buyer. */
+/**
+ * Buyer bottom tabs — mirrors the web RoleShell nav for /buyer.
+ *
+ * Also serves the `supplier` role: buying commodities and selling inputs are the
+ * two halves of one marketplace view, and the screens already branch on mode.
+ * What changed is that the mode now comes from the signed-in role rather than a
+ * useState toggle any account could flip.
+ */
 function BuyerNavigator() {
   const tabBarStyle = useTabBarStyle();
   return (
@@ -163,7 +171,10 @@ export function RootNavigator() {
           <RootStack.Screen name="Farmer" component={FarmerNavigator} />
         ) : role === "fpo" ? (
           <RootStack.Screen name="Fpo" component={FpoNavigator} />
+        ) : role === "admin" ? (
+          <RootStack.Screen name="Admin" component={AdminScreen} />
         ) : (
+          // buyer and supplier share this stack.
           <RootStack.Screen name="Buyer" component={BuyerNavigator} />
         )}
       </RootStack.Navigator>

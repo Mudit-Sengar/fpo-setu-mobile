@@ -63,6 +63,20 @@ export const accentColors: Record<Accent, { base: string; fg: string; soft: stri
   buyer: { base: colors.buyer, fg: colors.buyerForeground, soft: colors.buyerSoft },
 };
 
+/**
+ * Maps a role code to the accent its screens use.
+ *
+ * `supplier` is a role but not a visual identity: it opens the same Buyer stack
+ * (the two are the buy/sell halves of one marketplace view), so it shares the
+ * buyer accent. Takes a plain string so the theme stays free of auth imports.
+ */
+export function accentForRole(role: string): Accent {
+  if (role === "farmer" || role === "fpo") return role;
+  // `supplier` shares the buyer stack, and `admin` has no persona colour of its
+  // own — it is the platform, not a party in the market.
+  return "buyer";
+}
+
 // --radius: 0.75rem = 12px; sm/md/lg/xl derived exactly as in styles.css
 export const radius = {
   sm: 8,

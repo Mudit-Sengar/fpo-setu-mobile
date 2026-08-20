@@ -11,7 +11,8 @@ import {
 } from "../../lib/farmer-intents";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
-import { Input, Muted, Text, toast } from "../../components/ui";
+import { Badge, Input, Muted, Text, toast } from "../../components/ui";
+import { useUnreadCount } from "../../features/connections";
 import { Tile } from "../../components/common";
 import { useVoiceInput } from "../../hooks/useVoiceInput";
 import type { FarmerTabParamList } from "../../navigation/types";
@@ -27,6 +28,7 @@ import type { FarmerTabParamList } from "../../navigation/types";
 export function FarmerHomeScreen() {
   const nav = useNavigation<BottomTabNavigationProp<FarmerTabParamList>>();
   const farmer = useSessionFarmer();
+  const unread = useUnreadCount();
   const [q, setQ] = useState("");
 
   /** Single navigation sink for every resolved intent. */
@@ -96,6 +98,15 @@ export function FarmerHomeScreen() {
           icon={<Landmark size={26} color="#BE123C" />}
           onPress={() => goTo({ kind: "tab", tab: "Schemes" })} />
       </View>
+
+      {unread > 0 && (
+        <Pressable style={s.notice} onPress={() => nav.navigate("Connect", { sub: "farmers", req: Date.now() })}>
+          <Badge color="#ffffff" bg={colors.farmer}>
+            {`${unread} new ${unread === 1 ? "update" : "updates"}`}
+          </Badge>
+          <Muted style={{ flex: 1 }}>Tap to open My Network.</Muted>
+        </Pressable>
+      )}
 
       {/* ---------------- Krishi Bandhu ---------------- */}
       <View style={[s.bandhu, listening && { borderColor: colors.farmer, borderWidth: 2 }]}>
@@ -181,6 +192,10 @@ export function FarmerHomeScreen() {
 
 const s = StyleSheet.create({
   tiles: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md },
+  notice: {
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
+    backgroundColor: colors.farmerSoft, borderRadius: radius.md, padding: spacing.md,
+  },
   bandhu: {
     borderWidth: 1, borderColor: colors.border, borderRadius: radius.xl,
     backgroundColor: colors.card, padding: spacing.md, gap: spacing.md,

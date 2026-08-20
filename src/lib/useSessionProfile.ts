@@ -13,7 +13,7 @@ import { useApp } from "./app-state";
  */
 export function useSessionFarmer(): Farmer | null {
   const { profileId } = useApp();
-  const [farmer] = useDbQuery<Farmer | null>(
+  const farmer = useDbQuery<Farmer | null>(
     () => (profileId == null ? Promise.resolve(null) : farmerRepo.getFarmerById(profileId)),
     [profileId],
     null,

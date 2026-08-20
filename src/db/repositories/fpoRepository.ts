@@ -1,6 +1,7 @@
-import { withDb } from "../connection";
+import { withDb, withWrite } from "../connection";
+import { requireProfile, type SessionContext } from "../authz";
 import type {
-  FPO, FpoCumulative, FpoMeeting, FpoMonthlySummary, FPOSupply, InputNeed,
+  FPO, FpoCumulative, FpoMeeting, FpoMonthlySummary, FPOSupply,
   LedgerEntry, MemberEngagement, OpportunityDetail, Tier,
 } from "../types";
 
@@ -29,8 +30,16 @@ async function hydrateFpo(r: Record<string, unknown>): Promise<FPO> {
       .map((x) => String(x.commodity));
     const grades = ((await db.execute("SELECT grade FROM fpo_grades WHERE fpo_id = ?;", [id])).rows ?? [])
       .map((x) => String(x.grade));
-    const supply = ((await db.execute("SELECT * FROM fpo_supply WHERE fpo_id = ?;", [id])).rows ?? [])
-      .map(toSupply);
+    // Supply now comes from `requests`, not the retired `fpo_supply` table: what
+    // an FPO can supply IS a standing set of open supply requests, and reading it
+    // from one place is what lets a buyer respond to the very row shown here.
+    const supply = ((await db.execute(
+      `SELECT r.item, r.qty, r.grade, r.window_label
+         FROM requests r
+         JOIN parties p ON p.id = r.author_party_id
+        WHERE p.kind = 'fpo' AND p.entity_id = ?
+          AND r.kind = 'commodity_supply' AND r.status = 'open'
+        ORDER BY r.id;`, [id])).rows ?? []).map(toSupply);
 
     return {
       id,
@@ -59,96 +68,135 @@ async function hydrateFpo(r: Record<string, unknown>): Promise<FPO> {
   });
 }
 
+/* ------------------------------------------------------------- profile ---- */
+
+/**
+ * The editable half of an FPO's own record.
+ *
+ * District and block are separate here even though the screen used to show them
+ * as one "District / Block" field: joining them for display was fine, splitting
+ * a user-typed string back apart on a slash was not.
+ */
+export interface FpoProfileUpdate {
+  name: string;
+  regNo: string;
+  district: string;
+  block: string;
+  incorporated: string;
+  warehouseMT: number;
+  processingHas: boolean;
+  processingType: string | null;
+}
+
+/**
+ * Saves the signed-in FPO's own details.
+ *
+ * Takes no id — the target comes from the session, so this cannot be pointed at
+ * another organisation. Aggregate columns (members, tier, compliance, reputation)
+ * are deliberately not writable here: they are derived or externally assessed,
+ * and the screen does not offer them.
+ */
+export async function updateFpoProfile(ctx: SessionContext | null, input: FpoProfileUpdate): Promise<void> {
+  const fpoId = requireProfile(ctx, "fpo");
+  await withWrite("updateFpoProfile", (db) => db.execute(
+    `UPDATE fpos SET name = ?, reg_no = ?, district = ?, block = ?, incorporated = ?,
+                     warehouse_mt = ?, processing_has = ?, processing_type = ?
+       WHERE id = ?;`,
+    [
+      input.name, input.regNo, input.district, input.block, input.incorporated,
+      input.warehouseMT, input.processingHas ? 1 : 0, input.processingType,
+      fpoId,
+    ],
+  ));
+}
+
+/** Rows come from `requests` now; the FPOSupply shape is unchanged for screens. */
 const toSupply = (r: Record<string, unknown>): FPOSupply => ({
-  commodity: String(r.commodity),
-  qty_mt: Number(r.qty_mt ?? 0),
+  commodity: String(r.item),
+  qty_mt: Number(r.qty ?? 0),
   grade: String(r.grade ?? ""),
-  harvest_window: String(r.harvest_window ?? ""),
+  harvest_window: String(r.window_label ?? ""),
 });
 
-/* ------------------------------------------------------------ supply ---- */
-
-export async function listSupply(fpoId: string): Promise<FPOSupply[]> {
-  return withDb("listSupply", async (db) => {
-    const rows = (await db.execute("SELECT * FROM fpo_supply WHERE fpo_id = ? ORDER BY id;", [fpoId])).rows ?? [];
-    return rows.map(toSupply);
-  });
-}
-
-export async function insertSupply(fpoId: string, s: FPOSupply): Promise<void> {
-  await withDb("insertSupply", (db) =>
-    db.execute(
-      "INSERT INTO fpo_supply (fpo_id, commodity, qty_mt, grade, harvest_window) VALUES (?,?,?,?,?);",
-      [fpoId, s.commodity, s.qty_mt, s.grade, s.harvest_window],
-    ));
-}
-
-/* ------------------------------------------------------- input needs ---- */
-
-export async function listInputNeeds(fpoId: string): Promise<InputNeed[]> {
-  return withDb("listInputNeeds", async (db) => {
-    const rows = (await db.execute("SELECT * FROM input_needs WHERE fpo_id = ? ORDER BY id;", [fpoId])).rows ?? [];
-    return rows.map((r) => ({
-      item: String(r.item),
-      category: String(r.category ?? ""),
-      qty: String(r.qty ?? ""),
-      window: String(r.window ?? ""),
-      notes: r.notes == null ? undefined : String(r.notes),
-    }));
-  });
-}
-
-export async function insertInputNeed(fpoId: string, n: InputNeed): Promise<void> {
-  await withDb("insertInputNeed", (db) =>
-    db.execute(
-      "INSERT INTO input_needs (fpo_id, item, category, qty, window, notes) VALUES (?,?,?,?,?,?);",
-      [fpoId, n.item, n.category, n.qty, n.window, n.notes ?? null],
-    ));
-}
+/*
+ * NOTE: listSupply / insertSupply / listInputNeeds / insertInputNeed used to live
+ * here, reading and writing `fpo_supply` and `input_needs`. Both are now kinds of
+ * `requests` — see src/db/repositories/requestRepository.ts. Keeping thin
+ * forwarding wrappers here would have hidden the fact that these postings now
+ * have an author, a status and an audience, so the call sites moved instead.
+ */
 
 /* ---------------------------------------------------------- meetings ---- */
 
-export async function listMeetings(fpoId: string): Promise<FpoMeeting[]> {
+/** A meeting plus how many members were invited to it. */
+export interface FpoMeetingRow extends FpoMeeting {
+  id: number;
+  invitedCount: number;
+}
+
+export async function listMeetings(fpoId: string): Promise<FpoMeetingRow[]> {
   return withDb("listMeetings", async (db) => {
-    const rows = (await db.execute("SELECT * FROM fpo_meetings WHERE fpo_id = ? ORDER BY id DESC;", [fpoId])).rows ?? [];
+    const rows = (await db.execute(
+      `SELECT m.*, (SELECT COUNT(*) FROM meeting_invitations i WHERE i.meeting_id = m.id) AS invited_count
+         FROM fpo_meetings m WHERE m.fpo_id = ? ORDER BY m.id DESC;`, [fpoId])).rows ?? [];
     return rows.map((r) => ({
+      id: Number(r.id),
       date: String(r.date),
       time: String(r.time ?? ""),
       agenda: String(r.agenda ?? ""),
       venue: String(r.venue ?? ""),
+      invitedCount: Number(r.invited_count ?? 0),
     }));
   });
 }
 
-export async function insertMeeting(fpoId: string, m: FpoMeeting): Promise<void> {
-  await withDb("insertMeeting", (db) =>
-    db.execute("INSERT INTO fpo_meetings (fpo_id, date, time, agenda, venue) VALUES (?,?,?,?,?);",
-      [fpoId, m.date, m.time, m.agenda, m.venue]));
+/** Logs a meeting and returns its id, so invitations can be sent against it. */
+export async function insertMeeting(fpoId: string, m: FpoMeeting): Promise<number> {
+  return withWrite("insertMeeting", async (db) => {
+    await db.execute("INSERT INTO fpo_meetings (fpo_id, date, time, agenda, venue) VALUES (?,?,?,?,?);",
+      [fpoId, m.date, m.time, m.agenda, m.venue]);
+    const rows = (await db.execute(
+      "SELECT id FROM fpo_meetings WHERE fpo_id = ? ORDER BY id DESC LIMIT 1;", [fpoId])).rows ?? [];
+    return Number(rows[0]?.id ?? 0);
+  });
 }
 
 /* ------------------------------------------------------------ ledger ---- */
 
 export async function listLedger(fpoId: string): Promise<LedgerEntry[]> {
   return withDb("listLedger", async (db) => {
-    const rows = (await db.execute("SELECT * FROM ledger_entries WHERE fpo_id = ? ORDER BY id;", [fpoId])).rows ?? [];
+    // The counterparty name is joined rather than stored, so renaming a buyer
+    // renames it everywhere instead of leaving old entries with a stale copy.
+    const rows = (await db.execute(
+      `SELECT l.*, v.name AS counterparty_name
+         FROM ledger_entries l
+         LEFT JOIN v_parties v ON v.party_id = l.counterparty_party_id
+        WHERE l.fpo_id = ? ORDER BY l.id;`, [fpoId])).rows ?? [];
     return rows.map((r) => ({
       date: String(r.date),
       desc: String(r.description ?? ""),
       type: String(r.type) as LedgerEntry["type"],
       amount: Number(r.amount ?? 0),
       balance: Number(r.balance ?? 0),
-      counterpartyId: r.counterparty_id == null ? undefined : String(r.counterparty_id),
+      counterpartyPartyId: r.counterparty_party_id == null ? null : Number(r.counterparty_party_id),
+      counterpartyLabel: r.counterparty_label == null ? null : String(r.counterparty_label),
+      counterpartyName: String(r.counterparty_name ?? ""),
+      orderId: r.order_id == null ? null : Number(r.order_id),
       refId: r.ref_id == null ? undefined : String(r.ref_id),
     }));
   });
 }
 
 export async function insertLedgerEntry(fpoId: string, e: LedgerEntry): Promise<void> {
-  await withDb("insertLedgerEntry", (db) =>
+  await withWrite("insertLedgerEntry", (db) =>
     db.execute(
-      `INSERT INTO ledger_entries (fpo_id, date, description, type, amount, balance, counterparty_id, ref_id)
-       VALUES (?,?,?,?,?,?,?,?);`,
-      [fpoId, e.date, e.desc, e.type, e.amount, e.balance, e.counterpartyId ?? null, e.refId ?? null],
+      `INSERT INTO ledger_entries
+         (fpo_id, date, description, type, amount, balance,
+          counterparty_party_id, counterparty_label, order_id, ref_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?);`,
+      [fpoId, e.date, e.desc, e.type, e.amount, e.balance,
+        e.counterpartyPartyId ?? null, e.counterpartyLabel ?? null,
+        e.orderId ?? null, e.refId ?? null],
     ));
 }
 

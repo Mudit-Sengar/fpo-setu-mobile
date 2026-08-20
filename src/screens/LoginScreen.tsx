@@ -4,11 +4,11 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
-  AlertCircle, Check, Globe, LogIn, ShoppingBag, Sprout, Warehouse,
+  AlertCircle, Check, Globe, LogIn, Package, Shield, ShoppingBag, Sprout, Warehouse,
 } from "lucide-react-native";
 import { LANG_LABELS, useApp, type Lang, type Role } from "../lib/app-state";
 import { VIEW_ROLES } from "../services/authService";
-import { accentColors, colors, radius, spacing } from "../theme";
+import { accentColors, accentForRole, colors, radius, spacing } from "../theme";
 import { Button, Input, Label, Muted, Text } from "../components/ui";
 
 /**
@@ -22,7 +22,9 @@ import { Button, Input, Label, Muted, Text } from "../components/ui";
 const ROLE_META: Record<Role, { label: string; icon: (c: string) => React.ReactNode }> = {
   farmer: { label: "Farmer", icon: (c) => <Sprout size={18} color={c} /> },
   fpo: { label: "FPO", icon: (c) => <Warehouse size={18} color={c} /> },
-  buyer: { label: "Buyer / Seller", icon: (c) => <ShoppingBag size={18} color={c} /> },
+  buyer: { label: "Buyer", icon: (c) => <ShoppingBag size={18} color={c} /> },
+  supplier: { label: "Supplier", icon: (c) => <Package size={18} color={c} /> },
+  admin: { label: "Admin", icon: (c) => <Shield size={18} color={c} /> },
 };
 
 export function LoginScreen() {
@@ -35,15 +37,20 @@ export function LoginScreen() {
   const [role, setRole] = useState<Role>("farmer");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Admin signs in with an ID + password only — no role to pick. The account
+  // still needs an opening view, so it lands on Farmer and uses the TopBar's
+  // role switcher (already built for admins) to reach FPO/Buyer/Supplier/Admin.
+  const [adminMode, setAdminMode] = useState(false);
 
-  const accent = accentColors[role].base;
+  // `supplier` has no accent of its own — it opens the Buyer stack.
+  const accent = accentColors[accentForRole(adminMode ? "admin" : role)].base;
 
   async function submit() {
     if (busy) return;
     setError(null);
 
     if (username.trim() === "" || password === "") {
-      setError("Enter both username and password.");
+      setError(adminMode ? "Enter both Admin ID and password." : "Enter both username and password.");
       return;
     }
 
@@ -51,7 +58,7 @@ export function LoginScreen() {
     try {
       // PBKDF2 blocks the JS thread; yield one frame first so the spinner paints.
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      const result = await signIn(username, password, role);
+      const result = await signIn(username, password, adminMode ? "farmer" : role);
       // On success the navigator swaps this screen out — nothing to do here.
       if (!result.ok) setError(result.message);
     } catch {
@@ -89,15 +96,17 @@ export function LoginScreen() {
           <View style={s.card}>
             <Text size="lg" weight="700" style={{ marginBottom: spacing.xs }}>Sign in</Text>
             <Muted style={{ marginBottom: spacing.lg }}>
-              Enter your credentials and choose the view to open.
+              {adminMode
+                ? "Enter the Admin ID and password."
+                : "Enter your credentials and choose the view to open."}
             </Muted>
 
             <View style={{ marginBottom: spacing.md }}>
-              <Label>Username / User ID</Label>
+              <Label>{adminMode ? "Admin ID" : "Username / User ID"}</Label>
               <Input
                 value={username}
                 onChangeText={(t) => { setUsername(t); setError(null); }}
-                placeholder="e.g. farmer01"
+                placeholder={adminMode ? "e.g. admin01" : "e.g. farmer01"}
                 autoCapitalize="none"
                 autoCorrect={false}
                 editable={!busy}
@@ -120,38 +129,42 @@ export function LoginScreen() {
               />
             </View>
 
-            <Label>Role</Label>
-            <View style={s.roleRow}>
-              {VIEW_ROLES.map((r) => {
-                const active = r === role;
-                const a = accentColors[r].base;
-                return (
-                  <Pressable
-                    key={r}
-                    onPress={() => { setRole(r); setError(null); }}
-                    disabled={busy}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected: active }}
-                    accessibilityLabel={`Sign in as ${ROLE_META[r].label}`}
-                    style={[
-                      s.roleChip,
-                      active && { backgroundColor: a, borderColor: a },
-                    ]}
-                  >
-                    {ROLE_META[r].icon(active ? "#ffffff" : a)}
-                    <Text
-                      size="xxs"
-                      weight="700"
-                      color={active ? "#ffffff" : colors.foreground}
-                      center
-                      style={{ marginTop: 4 }}
-                    >
-                      {ROLE_META[r].label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+            {!adminMode && (
+              <>
+                <Label>Role</Label>
+                <View style={s.roleRow}>
+                  {VIEW_ROLES.filter((r) => r !== "admin").map((r) => {
+                    const active = r === role;
+                    const a = accentColors[accentForRole(r)].base;
+                    return (
+                      <Pressable
+                        key={r}
+                        onPress={() => { setRole(r); setError(null); }}
+                        disabled={busy}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected: active }}
+                        accessibilityLabel={`Sign in as ${ROLE_META[r].label}`}
+                        style={[
+                          s.roleChip,
+                          active && { backgroundColor: a, borderColor: a },
+                        ]}
+                      >
+                        {ROLE_META[r].icon(active ? "#ffffff" : a)}
+                        <Text
+                          size="xxs"
+                          weight="700"
+                          color={active ? "#ffffff" : colors.foreground}
+                          center
+                          style={{ marginTop: 4 }}
+                        >
+                          {ROLE_META[r].label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </>
+            )}
 
             {error != null && (
               <View style={s.error} accessibilityLiveRegion="polite">
@@ -174,8 +187,19 @@ export function LoginScreen() {
               </Button>
             </View>
 
-            <Muted center style={{ marginTop: spacing.md }}>
-              Admin accounts can open any of the three views after signing in.
+            <Pressable
+              onPress={() => { setAdminMode((v) => !v); setError(null); }}
+              disabled={busy}
+              style={{ marginTop: spacing.md, alignSelf: "center" }}
+              accessibilityRole="button"
+            >
+              <Text size="xs" weight="700" color={colors.primary} center>
+                {adminMode ? "← Back to role login" : "Admin login instead →"}
+              </Text>
+            </Pressable>
+
+            <Muted center style={{ marginTop: spacing.sm }}>
+              Admin accounts can open Farmer, FPO and Buyer/Seller views after signing in.
             </Muted>
           </View>
         </ScrollView>

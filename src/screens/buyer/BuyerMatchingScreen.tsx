@@ -2,13 +2,15 @@ import React, { useCallback, useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { ArrowDown, Layers, MapPin, Network, Package, Star, Users } from "lucide-react-native";
-import { farmerRepo, fpoRepo } from "../../db";
+import { farmerRepo, fpoRepo, networkRepo, readinessRepo, requestRepo, reviewRepo } from "../../db";
+import { describeWriteError } from "../../db/authz";
+import type { RequestRow } from "../../db/repositories/requestRepository";
 import { useDbQuery } from "../../db/useDbQuery";
-import type { Farmer, FPO, FPOSupply, InputNeed } from "../../db/types";
-import {
-  DEFAULT_DEMAND, DEFAULT_SUPPLY, loadDemands, loadSupplies,
-  type Demand, type SupplyPost,
-} from "../../lib/buyer-storage";
+import type { FPO } from "../../db/types";
+import type { PeerFarmer } from "../../db/repositories/farmerRepository";
+import { useApp } from "../../lib/app-state";
+import { explainMatch, matchScore, type MatchBreakdown } from "../../lib/matching";
+import { formatQuantity } from "../../lib/quantity";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import {
@@ -16,83 +18,164 @@ import {
   Muted, Select, Text, toast,
 } from "../../components/ui";
 import { Meta } from "../../components/common";
-import { ModeToggle, Stepper, type Mode } from "../../features/buyer-shared";
+import { ModeToggle, Stepper, useBuyerMode } from "../../features/buyer-shared";
+import { ConnectionsPanel } from "../../features/connections";
 
-/** Ported from the web app's src/routes/buyer.matching.tsx */
+/**
+ * Ported from the web app's src/routes/buyer.matching.tsx.
+ *
+ * Matching now runs against real `requests` rather than a table of FPO supply
+ * nobody could reply to. Each card is somebody's open posting, so "Connect"
+ * writes a `request_responses` row that appears in that party's inbox.
+ *
+ * NOTE: the "Max distance (km)" filter is gone. It used to filter on a distance
+ * derived from a character of the FPO's id (`60 + (id.charCodeAt(4) % 7) * 45`),
+ * so it was rejecting real FPOs on invented grounds. District is used instead
+ * until the district-distance tables land.
+ */
 export function BuyerMatchingScreen() {
-  const [mode, setMode] = useState<Mode>("buyer");
+  const { mode } = useBuyerMode();
   return (
     <RoleShell accent="buyer" screenName="Connect with Farmer or FPO" header={<Stepper />}>
-      <ModeToggle mode={mode} setMode={setMode} />
+      <ModeToggle />
       {mode === "buyer" ? <BuyerMatching /> : <SupplierMatching />}
+      <ConnectionsPanel accent={colors.buyer} />
     </RoleShell>
   );
 }
 
-interface Candidate { fpo: FPO; supply: FPOSupply; dist: number }
+const COMMODITIES = ["Onion", "Tomato", "Soybean", "Tur", "Banana", "Turmeric", "Cotton", "Rice", "Mosambi", "Gram"];
+const INPUT_CATEGORIES = ["Seeds", "Fertilizer", "Pesticide", "Bio-input", "Equipment rental", "Equipment sale"];
+
+interface Candidate {
+  request: RequestRow;
+  fpo: FPO | undefined;
+  breakdown: MatchBreakdown;
+  rep: { rating: number; reviewCount: number } | undefined;
+}
 
 function BuyerMatching() {
-  const [fpos] = useDbQuery<FPO[]>(() => fpoRepo.listFpos(), [], []);
-  const [farmers] = useDbQuery<Farmer[]>(() => farmerRepo.listFarmers(), [], []);
-  const [latest, setLatest] = useState<Demand>(DEFAULT_DEMAND);
-  const [commodity, setCommodity] = useState(DEFAULT_DEMAND.commodity);
-  const [grade, setGrade] = useState(DEFAULT_DEMAND.grade);
-  const [qty, setQty] = useState(String(DEFAULT_DEMAND.qty_mt));
-  const [maxKm, setMaxKm] = useState("400");
+  const { session } = useApp();
+  const fpos = useDbQuery<FPO[]>(() => fpoRepo.listFpos(), [], []);
 
-  // The web app read localStorage synchronously during render. AsyncStorage is
-  // async, so we reload on focus — which also picks up a demand just posted on
-  // the Home tab, matching the web behaviour of navigating straight here.
+  const [latest, setLatest] = useState<RequestRow | null>(null);
+  const [commodity, setCommodity] = useState(COMMODITIES[0]);
+  const [grade, setGrade] = useState("A");
+  const [qty, setQty] = useState("250");
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  // Reloads on focus so a demand just posted on the Home tab is picked up — that
+  // form navigates straight here after posting.
   useFocusEffect(useCallback(() => {
     let cancelled = false;
-    void loadDemands().then((ds) => {
-      if (cancelled) return;
-      const d = ds[0] ?? DEFAULT_DEMAND;
+    void requestRepo.listMyRequests(session, "commodity_demand").then((ds) => {
+      if (cancelled || ds.length === 0) return;
+      const d = ds[0];
       setLatest(d);
-      setCommodity(d.commodity);
-      setGrade(d.grade);
-      setQty(String(d.qty_mt));
+      setCommodity(d.item);
+      setGrade(d.grade === "" ? "A" : d.grade);
+      setQty(String(d.qty));
     });
     return () => { cancelled = true; };
-  }, []));
+  }, [session]));
 
   const qtyNum = Number(qty) || 0;
-  const kmNum = Number(maxKm) || 0;
+  const myDistrict = latest?.district ?? "";
 
-  // Matching logic preserved verbatim from the web app, including the
-  // pseudo-random distance derived from the FPO id character code.
+  // Open supply postings for this commodity, from anyone but the caller.
+  const offers = useDbQuery<RequestRow[]>(
+    () => requestRepo.listOpenRequests({
+      kind: "commodity_supply", item: commodity, excludePartyId: session?.partyId,
+    }),
+    [commodity, session?.partyId],
+    [],
+  );
+
+  // Real kilometres, from the precomputed district matrix.
+  const distances = useDbQuery<Map<string, number>>(
+    () => readinessRepo.distanceMatrix(), [], new Map());
+
+  // Real ratings, from reviews written against delivered orders.
+  const reputation = useDbQuery<Map<number, { rating: number; reviewCount: number }>>(
+    () => reviewRepo.reputationByParty(), [], new Map());
+
   const candidates = useMemo<Candidate[]>(() => {
-    return fpos
-      .map((f) => {
-        const sup = f.supply.find((x) => x.commodity.toLowerCase() === commodity.toLowerCase());
-        if (!sup) return null;
-        const dist = 60 + (f.id.charCodeAt(4) % 7) * 45;
-        const gradeMatch = grade === "A" ? sup.grade === "A" || sup.grade === "Sortex" || sup.grade === "Export" : true;
-        if (!gradeMatch) return null;
-        return { fpo: f, supply: sup, dist };
+    return offers
+      .map((request) => {
+        const fpo = fpos.find((f) => f.id === request.authorEntityId);
+        const rep = reputation.get(request.authorPartyId);
+        const breakdown = matchScore({
+          requiredQty: qtyNum,
+          availableQty: request.qty,
+          requiredGrade: grade,
+          offeredGrade: request.grade,
+          distanceKm: readinessRepo.kmBetween(distances, myDistrict, request.district),
+          rating: rep?.rating,
+          reviewCount: rep?.reviewCount,
+        });
+        return { request, fpo, breakdown, rep };
       })
-      .filter((c): c is Candidate => c !== null)
-      .filter((c) => c.dist <= kmNum)
-      .sort((a, b) => b.supply.qty_mt - a.supply.qty_mt);
-  }, [fpos, commodity, grade, kmNum]);
+      .sort((a, b) => b.breakdown.score - a.breakdown.score);
+  }, [offers, fpos, qtyNum, grade, myDistrict, reputation, distances]);
 
-  const fitsSingle = candidates.filter((c) => c.supply.qty_mt >= qtyNum);
+  const fitsSingle = candidates.filter((c) => c.request.qty >= qtyNum);
   const needsCluster = fitsSingle.length === 0 && candidates.length > 0;
 
-  // Greedy regional-cluster aggregation — preserved verbatim.
+  // Greedy regional-cluster aggregation, now over real postings. The cluster is
+  // still assembled per-render; persisting it is Phase 7's job.
   const cluster = useMemo(() => {
     if (!needsCluster) return null;
     const picked: Candidate[] = [];
     let total = 0;
     for (const c of candidates) {
       picked.push(c);
-      total += c.supply.qty_mt;
+      total += c.request.qty;
       if (total >= qtyNum) break;
     }
-    return { picked, total, anchor: picked[0]?.fpo };
+    return { picked, total, anchor: picked[0] };
   }, [needsCluster, candidates, qtyNum]);
 
-  const farmerMatches = farmers.filter((f) => f.crops.includes(commodity)).slice(0, 3);
+  async function respondTo(c: Candidate) {
+    if (busyId != null) return;
+    setBusyId(c.request.id);
+    try {
+      await requestRepo.respond(session, c.request.id, {
+        message: `We would like to buy ${Math.min(qtyNum, c.request.qty)} MT of ${c.request.item}.`,
+        offeredQty: Math.min(qtyNum, c.request.qty),
+        offeredUnit: "MT",
+      });
+      toast.success(`Reply sent to ${c.request.authorName}. They can now accept or decline.`);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not send that reply."));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // Farmers who grow this commodity, with the party id a connection needs.
+  const farmerMatches = useDbQuery<PeerFarmer[]>(
+    () => farmerRepo.listPeerFarmers(commodity, null, latest?.district ?? null),
+    [commodity, latest?.district],
+    [],
+  );
+
+  async function connectToFarmer(f: PeerFarmer) {
+    if (busyId != null) return;
+    setBusyId(-1);
+    try {
+      await networkRepo.requestConnection(session, {
+        otherPartyId: f.partyId,
+        relationType: "trade",
+        message: `We are looking for ${commodity} and would like to buy from you directly.`,
+        openThread: true,
+      });
+      toast.success(`Connection request sent to ${f.name}.`);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not send that request."));
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   return (
     <>
@@ -105,15 +188,17 @@ function BuyerMatching() {
         </CardHeader>
         <CardContent>
           <Field label="Commodity">
-            <Select value={commodity} onChange={setCommodity}
-              options={["Onion", "Tomato", "Soybean", "Tur", "Banana", "Turmeric", "Cotton", "Rice", "Mosambi", "Gram"]} />
+            <Select value={commodity} onChange={setCommodity} options={COMMODITIES} />
           </Field>
           <Field label="Min grade"><Select value={grade} options={["A", "B"]} onChange={setGrade} /></Field>
           <Field label="Order quantity (MT)"><Input value={qty} onChangeText={setQty} keyboardType="numeric" /></Field>
-          <Field label="Max distance (km)"><Input value={maxKm} onChangeText={setMaxKm} keyboardType="numeric" /></Field>
-          <View style={{ flexDirection: "row" }}>
-            <Badge color={colors.buyer} bg={colors.buyerSoft}>{`Delivery: ${latest.delivery} · ${latest.location}`}</Badge>
-          </View>
+          {latest != null && (
+            <View style={{ flexDirection: "row" }}>
+              <Badge color={colors.buyer} bg={colors.buyerSoft}>
+                {`Delivery: ${latest.windowLabel} · ${latest.district}`}
+              </Badge>
+            </View>
+          )}
         </CardContent>
       </Card>
 
@@ -121,7 +206,10 @@ function BuyerMatching() {
         <Card>
           <CardHeader><CardTitle>{`Ranked FPO matches (${fitsSingle.length})`}</CardTitle></CardHeader>
           <CardContent>
-            {fitsSingle.slice(0, 4).map((c, i) => <FpoCard key={c.fpo.id} c={c} score={94 - i * 6} />)}
+            {fitsSingle.slice(0, 4).map((c) => (
+              <FpoCard key={c.request.id} c={c} busy={busyId === c.request.id}
+                onRespond={() => respondTo(c)} />
+            ))}
           </CardContent>
         </Card>
       )}
@@ -138,15 +226,17 @@ function BuyerMatching() {
             <Text size="sm">
               {"A single FPO can't meet your "}
               <Text size="sm" weight="700">{`${qtyNum} MT ${commodity}`}</Text>
-              {` order. We assembled a regional cluster of ${cluster.picked.length} nearby FPOs:`}
+              {` order. We assembled a regional cluster of ${cluster.picked.length} FPOs:`}
             </Text>
 
             <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
               {cluster.picked.map((c) => (
-                <View key={c.fpo.id} style={s.clusterItem}>
-                  <Text size="sm" weight="600">{c.fpo.name.split(" Farmer")[0]}</Text>
-                  <Muted>{`${c.fpo.district} · ${c.dist} km`}</Muted>
-                  <Text size="xs" style={{ marginTop: 2 }}>{`${c.supply.qty_mt} MT · Grade ${c.supply.grade}`}</Text>
+                <View key={c.request.id} style={s.clusterItem}>
+                  <Text size="sm" weight="600">{c.request.authorName.split(" Farmer")[0]}</Text>
+                  <Muted>{c.request.district}</Muted>
+                  <Text size="xs" style={{ marginTop: 2 }}>
+                    {`${c.request.qty} MT · Grade ${c.request.grade}`}
+                  </Text>
                 </View>
               ))}
             </View>
@@ -162,13 +252,14 @@ function BuyerMatching() {
               <View style={s.anchorBox}>
                 <Text size="xs">
                   <Text size="xs" weight="700" color={colors.buyer}>{"Anchor FPO: "}</Text>
-                  {cluster.anchor?.name}
+                  {cluster.anchor?.request.authorName}
                 </Text>
-                <Muted style={{ marginTop: 2 }}>Handles consolidation, quality & communication.</Muted>
+                <Muted style={{ marginTop: 2 }}>Handles consolidation, quality &amp; communication.</Muted>
               </View>
               <Button full accent={colors.buyer} style={{ marginTop: spacing.md }}
-                onPress={() => toast.success("Connection request sent to the cluster anchor.")}>
-                Connect with cluster
+                disabled={cluster.anchor == null || busyId != null}
+                onPress={() => { if (cluster.anchor != null) void respondTo(cluster.anchor); }}>
+                Reply to the cluster anchor
               </Button>
             </View>
           </CardContent>
@@ -184,13 +275,13 @@ function BuyerMatching() {
             </View>
           </CardHeader>
           <CardContent>
-            {farmerMatches.map((f) => (
+            {farmerMatches.slice(0, 4).map((f) => (
               <View key={f.id} style={s.itemCard}>
                 <Text size="sm" weight="600">{f.name}</Text>
                 <Muted>{`${f.village}, ${f.district} · ${f.landAcres} ac`}</Muted>
                 <Text size="xs" style={{ marginTop: 2 }}>{`Crops: ${f.crops.join(", ")}`}</Text>
                 <Button full size="sm" accent={colors.buyer} style={{ marginTop: spacing.sm }}
-                  onPress={() => toast.success(`Connection request sent to ${f.name}.`)}>
+                  disabled={busyId != null} onPress={() => connectToFarmer(f)}>
                   Connect
                 </Button>
               </View>
@@ -201,7 +292,10 @@ function BuyerMatching() {
 
       {candidates.length === 0 && (
         <Card><CardContent style={{ paddingTop: spacing.lg }}>
-          <Muted center>No FPOs match these filters. Try increasing distance or relaxing grade.</Muted>
+          <Muted center>
+            No FPO has an open posting for this commodity. Try another commodity, or
+            check back once FPOs have posted their supply.
+          </Muted>
         </CardContent></Card>
       )}
     </>
@@ -209,45 +303,47 @@ function BuyerMatching() {
 }
 
 function SupplierMatching() {
-  const [fpos] = useDbQuery<FPO[]>(() => fpoRepo.listFpos(), [], []);
-  const [farmers] = useDbQuery<Farmer[]>(() => farmerRepo.listFarmers(), [], []);
-  const [latest, setLatest] = useState<SupplyPost>(DEFAULT_SUPPLY);
-  const [category, setCategory] = useState(DEFAULT_SUPPLY.category);
-  const [maxKm, setMaxKm] = useState("400");
-
-  // Input needs come from the active FPO's list; the first seeded FPO owns them.
-  const [allNeeds] = useDbQuery<InputNeed[]>(
-    () => (fpos[0] != null ? fpoRepo.listInputNeeds(fpos[0].id) : Promise.resolve([])),
-    [fpos], [],
-  );
+  const { session } = useApp();
+  const [latest, setLatest] = useState<RequestRow | null>(null);
+  const [category, setCategory] = useState(INPUT_CATEGORIES[1]);
+  const [busyId, setBusyId] = useState<number | null>(null);
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
-    void loadSupplies().then((ps) => {
-      if (cancelled) return;
-      const p = ps[0] ?? DEFAULT_SUPPLY;
-      setLatest(p);
-      setCategory(p.category);
+    void requestRepo.listMyRequests(session, "input_supply").then((ps) => {
+      if (cancelled || ps.length === 0) return;
+      setLatest(ps[0]);
+      setCategory(ps[0].category === "" ? INPUT_CATEGORIES[1] : ps[0].category);
     });
     return () => { cancelled = true; };
-  }, []));
+  }, [session]));
 
-  const kmNum = Number(maxKm) || 0;
-  const matchingNeeds = useMemo(
-    () => allNeeds.filter((n) => n.category === category),
-    [allNeeds, category],
+  // Every FPO's open input requirement in this category — not, as before, the
+  // first seeded FPO's needs handed out round-robin to six unrelated FPOs.
+  const needs = useDbQuery<RequestRow[]>(
+    () => requestRepo.listOpenRequests({
+      kind: "input_demand", category, excludePartyId: session?.partyId,
+    }),
+    [category, session?.partyId],
+    [],
   );
 
-  const matchedFpos = useMemo(() => {
-    return fpos.slice(0, 6).map((f, i) => ({
-      fpo: f,
-      need: matchingNeeds[i % Math.max(1, matchingNeeds.length)] ?? matchingNeeds[0],
-      dist: 40 + i * 35,
-      score: 95 - i * 7,
-    })).filter((m) => m.dist <= kmNum && m.need);
-  }, [fpos, matchingNeeds, kmNum]);
-
-  const farmerMatches = farmers.slice(0, 3).map((f, i) => ({ farmer: f, dist: 20 + i * 30, score: 88 - i * 5 }));
+  async function quote(r: RequestRow) {
+    if (busyId != null) return;
+    setBusyId(r.id);
+    try {
+      await requestRepo.respond(session, r.id, {
+        message: `We can supply ${r.qtyLabel !== "" ? r.qtyLabel : `${r.qty} ${r.unit}`} of ${r.item}.`,
+        offeredQty: r.qty,
+        offeredUnit: r.unit,
+      });
+      toast.success(`Quote sent to ${r.authorName}.`);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not send that quote."));
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   return (
     <>
@@ -260,15 +356,15 @@ function SupplierMatching() {
         </CardHeader>
         <CardContent>
           <Field label="Input category">
-            <Select value={category} onChange={setCategory}
-              options={["Seeds", "Fertilizer", "Pesticide", "Bio-input", "Equipment rental", "Equipment sale"]} />
+            <Select value={category} onChange={setCategory} options={INPUT_CATEGORIES} />
           </Field>
-          <Field label="Max distance (km)"><Input value={maxKm} onChangeText={setMaxKm} keyboardType="numeric" /></Field>
-          <View style={{ flexDirection: "row" }}>
-            <Badge color={colors.buyer} bg={colors.buyerSoft}>
-              {`Posting: ${latest.qty} ${latest.item} · ${latest.pricePerUnit}`}
-            </Badge>
-          </View>
+          {latest != null && (
+            <View style={{ flexDirection: "row" }}>
+              <Badge color={colors.buyer} bg={colors.buyerSoft}>
+                {`Your posting: ${formatQuantity(latest.qty, latest.unit, latest.qtyLabel)} ${latest.item}`}
+              </Badge>
+            </View>
+          )}
         </CardContent>
       </Card>
 
@@ -276,51 +372,35 @@ function SupplierMatching() {
         <CardHeader>
           <View style={s.titleRow}>
             <Package size={16} color={colors.buyer} />
-            <CardTitle>{`FPOs needing your inputs (${matchedFpos.length})`}</CardTitle>
+            <CardTitle>{`FPOs needing your inputs (${needs.length})`}</CardTitle>
           </View>
         </CardHeader>
         <CardContent>
-          {matchedFpos.map((m) => (
-            <View key={m.fpo.id} style={s.itemCard}>
+          {needs.length === 0 && (
+            <Muted>No FPO has an open requirement in this category right now.</Muted>
+          )}
+          {needs.map((r) => (
+            <View key={r.id} style={s.itemCard}>
               <View style={s.rowBetween}>
                 <View style={{ flex: 1 }}>
-                  <Text size="sm" weight="700">{m.fpo.name}</Text>
-                  <Muted>{`${m.fpo.district} · ${m.dist} km`}</Muted>
+                  <Text size="sm" weight="700">{r.authorName}</Text>
+                  <Muted>{r.district}</Muted>
                 </View>
-                <Badge color={colors.buyerForeground} bg={colors.buyer}>{`${m.score}% match`}</Badge>
+                {r.pendingCount > 0 && (
+                  <Badge color={colors.mutedForeground} bg={colors.muted}>
+                    {`${r.pendingCount} quoted`}
+                  </Badge>
+                )}
               </View>
               <Muted style={{ marginTop: spacing.sm }}>
-                {"Needs: "}<Text size="xs" weight="600">{m.need.item}</Text>
+                {"Needs: "}<Text size="xs" weight="600">{r.item}</Text>
               </Muted>
-              <Muted>{`Qty: ${m.need.qty} · Window: ${m.need.window}`}</Muted>
+              <Muted>
+                {`Qty: ${formatQuantity(r.qty, r.unit, r.qtyLabel)}${r.windowLabel !== "" ? ` · Window: ${r.windowLabel}` : ""}`}
+              </Muted>
               <Button size="sm" accent={colors.buyer} style={{ marginTop: spacing.sm }}
-                onPress={() => toast.success(`Quote sent to ${m.fpo.name}.`)}>
-                Connect
-              </Button>
-            </View>
-          ))}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <View style={s.titleRow}>
-            <Users size={16} color={colors.buyer} />
-            <CardTitle>Direct farmer matches</CardTitle>
-          </View>
-        </CardHeader>
-        <CardContent>
-          {farmerMatches.map((m) => (
-            <View key={m.farmer.id} style={s.itemCard}>
-              <View style={s.rowBetween}>
-                <Text size="sm" weight="600" style={{ flex: 1 }}>{m.farmer.name}</Text>
-                <Badge color={colors.buyerForeground} bg={colors.buyer}>{`${m.score}%`}</Badge>
-              </View>
-              <Muted>{`${m.farmer.village}, ${m.farmer.district} · ${m.dist} km`}</Muted>
-              <Text size="xs" style={{ marginTop: 2 }}>{`Crops: ${m.farmer.crops.join(", ")} · ${m.farmer.landAcres} ac`}</Text>
-              <Button full size="sm" accent={colors.buyer} style={{ marginTop: spacing.sm }}
-                onPress={() => toast.success(`Quote sent to ${m.farmer.name}.`)}>
-                Connect
+                disabled={busyId === r.id} onPress={() => quote(r)}>
+                {busyId === r.id ? "Sending…" : "Send quote"}
               </Button>
             </View>
           ))}
@@ -330,30 +410,46 @@ function SupplierMatching() {
   );
 }
 
-function FpoCard({ c, score }: { c: Candidate; score: number }) {
+function FpoCard({ c, busy, onRespond }: { c: Candidate; busy: boolean; onRespond: () => void }) {
+  const { request, fpo, breakdown, rep } = c;
+  const replied = request.responseCount > 0;
+
   return (
     <View style={s.itemCard}>
       <View style={s.rowBetween}>
         <View style={{ flex: 1 }}>
-          <Text size="sm" weight="700">{c.fpo.name}</Text>
-          <Muted>{c.fpo.tagline}</Muted>
+          <Text size="sm" weight="700">{request.authorName}</Text>
+          <Muted>{fpo?.tagline ?? request.district}</Muted>
         </View>
-        <Badge color={colors.buyerForeground} bg={colors.buyer}>{`${score}% match`}</Badge>
+        <Badge color={colors.buyerForeground} bg={colors.buyer}>{`${breakdown.score}% match`}</Badge>
       </View>
+
+      <Muted style={{ marginTop: 4 }}>{explainMatch(breakdown)}</Muted>
+
       <View style={s.metaGrid}>
-        <Meta icon={<Layers size={12} color={colors.mutedForeground} />} label={`${c.supply.qty_mt} MT available · Grade ${c.supply.grade}`} />
-        <Meta icon={<MapPin size={12} color={colors.mutedForeground} />} label={`${c.dist} km · ${c.fpo.district}`} />
-        <Meta icon={<Star size={12} color={colors.mutedForeground} />} label={`${c.fpo.reputation}★ (${c.fpo.reviews} reviews)`} />
-        <Meta icon={<Network size={12} color={colors.mutedForeground} />} label={`${c.fpo.tier} · ${c.fpo.members} members`} />
+        <Meta icon={<Layers size={12} color={colors.mutedForeground} />}
+          label={`${request.qty} MT available · Grade ${request.grade}`} />
+        <Meta icon={<MapPin size={12} color={colors.mutedForeground} />}
+          label={request.district} />
+        {/* The rating is computed from reviews against delivered orders — the
+            fpos.reputation column it used to read was seeded and never written. */}
+        <Meta icon={<Star size={12} color={colors.mutedForeground} />}
+          label={rep == null || rep.reviewCount === 0
+            ? "Not yet rated"
+            : `${rep.rating}★ (${rep.reviewCount} ${rep.reviewCount === 1 ? "review" : "reviews"})`} />
+        {fpo != null && (
+          <Meta icon={<Network size={12} color={colors.mutedForeground} />}
+            label={`${fpo.tier} · ${fpo.members} members`} />
+        )}
       </View>
+
       <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
         <Button size="sm" variant="outline" accent={colors.buyer}
-          onPress={() => toast.message(`${c.fpo.name} — ${c.fpo.tagline}`)}>
+          onPress={() => toast.message(`${request.authorName} — ${fpo?.tagline ?? request.item}`)}>
           View profile
         </Button>
-        <Button size="sm" accent={colors.buyer}
-          onPress={() => toast.success(`Connection request sent to ${c.fpo.name}.`)}>
-          Connect
+        <Button size="sm" accent={colors.buyer} disabled={busy} onPress={onRespond}>
+          {busy ? "Sending…" : replied ? "Update reply" : "Reply"}
         </Button>
       </View>
     </View>

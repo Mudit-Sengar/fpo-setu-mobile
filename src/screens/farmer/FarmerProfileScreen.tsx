@@ -21,12 +21,12 @@ export function FarmerProfileScreen() {
   const nav = useNavigation();
   const farmer = useSessionFarmer();
   const farmerId = useSessionFarmerId();
-  const [fpo] = useDbQuery<FPO | null>(
+  const fpo = useDbQuery<FPO | null>(
     () => (farmer?.fpoId != null ? fpoRepo.getFpoById(farmer.fpoId) : Promise.resolve(null)),
     [farmer?.fpoId], null);
 
   // AgriStack-derived fields — now columns on `farmers` rather than local constants.
-  const [extras] = useDbQuery(
+  const extras = useDbQuery(
     () => (farmerId == null
       ? Promise.resolve({ taluka: "", state: "", surveyNo: "", khasraNo: "" })
       : farmerRepo.getFarmerProfileExtras(farmerId)),

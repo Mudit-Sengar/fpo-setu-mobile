@@ -33,8 +33,15 @@ export interface Session {
   isAdmin: boolean;
   /** The view currently open. Admins can change this without re-authenticating. */
   activeRole: ViewRole;
-  /** `farmers.id` / `fpos.id` / `buyers.id` backing the active view. */
+  /** `farmers.id` / `fpos.id` / `buyers.id` / `suppliers.id` backing the active view. */
   profileId: string;
+  /**
+   * `parties.id` for the same profile — the key every relationship table
+   * (connections, requests, orders, reviews, messages) foreign-keys to. Screens
+   * that only read entity data keep using `profileId`; anything that records an
+   * action by this session uses `partyId`.
+   */
+  partyId: number;
 }
 
 export type SignInResult =
@@ -54,7 +61,8 @@ export interface AuthService {
 const INVALID = "Incorrect username or password.";
 
 function viewableRolesFor(roles: RoleCode[]): ViewRole[] {
-  // An admin can open every view without those roles being assigned individually.
+  // An admin can open every view without those roles being assigned individually,
+  // including the admin view itself.
   if (roles.includes("admin")) return [...VIEW_ROLES];
   return VIEW_ROLES.filter((r) => roles.includes(r));
 }
@@ -62,8 +70,11 @@ function viewableRolesFor(roles: RoleCode[]): ViewRole[] {
 async function buildSession(
   user: authRepo.UserRow, roles: RoleCode[], activeRole: ViewRole,
 ): Promise<Session | null> {
-  const profileId = await authRepo.getProfileId(user.id, activeRole);
-  if (profileId == null) return null;
+  // Null when no profile is linked. There is no longer a fallback to the first
+  // row of the domain table, so this is a hard failure rather than a silent
+  // impersonation — see authRepository.getProfile.
+  const profile = await authRepo.getProfile(user.id, activeRole);
+  if (profile == null) return null;
   return {
     userId: user.id,
     username: user.username,
@@ -72,7 +83,8 @@ async function buildSession(
     viewableRoles: viewableRolesFor(roles),
     isAdmin: roles.includes("admin"),
     activeRole,
-    profileId,
+    profileId: profile.entityId,
+    partyId: profile.partyId,
   };
 }
 

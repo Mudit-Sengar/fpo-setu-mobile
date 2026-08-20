@@ -5,16 +5,27 @@ import React, { useEffect, useMemo, useState } from "react";
 import { StyleSheet, View, useWindowDimensions } from "react-native";
 import {
   AlertTriangle, Banknote, BookOpenCheck, Building2, CalendarDays, CheckCircle2,
-  ChevronRight, FileCheck, GraduationCap, Handshake, LandPlot, Landmark, Mail,
-  MessageCircle, Package, Phone, Plus, Send, ShieldCheck, Sparkles, Sprout, Star, Target,
-  TrendingUp, Truck, Users, Users2, Volume2, XCircle,
+  ChevronRight, ClipboardList, FileCheck, GraduationCap, Handshake, Inbox, LandPlot,
+  Landmark, Mail, MessageCircle, Package, Phone, Plus, Send, ShieldCheck, Sparkles,
+  Sprout, Star, Target, TrendingUp, Truck, UserPlus, Users, Users2, Volume2, XCircle,
 } from "lucide-react-native";
 import { useApp } from "../lib/app-state";
 import { isSchemeEligible } from "../lib/mockData";
-import { contentRepo, fpoRepo, marketRepo } from "../db";
+import { explainMatch, matchScore } from "../lib/matching";
+import { formatQuantity, parseQuantity } from "../lib/quantity";
+import {
+  contentRepo, fpoRepo, marketRepo, membershipRepo, networkRepo, orderRepo,
+  readinessRepo, requestRepo, reviewRepo, serviceRepo,
+} from "../db";
+import type { ServiceRequestRow } from "../db/repositories/serviceRepository";
+import type { ReviewRow } from "../db/repositories/reviewRepository";
+import type { EngagementRow, MembershipRow } from "../db/repositories/membershipRepository";
+import type { FpoMeetingRow } from "../db/repositories/fpoRepository";
+import { describeWriteError } from "../db/authz";
+import type { RequestRow, ResponseRow } from "../db/repositories/requestRepository";
 import { useDbQuery } from "../db/useDbQuery";
 import type {
-  FPO, FpoCumulative, FpoMeeting, FPOSupply, InputNeed, LedgerEntry, MemberEngagement,
+  FPO, FpoCumulative, FpoMeeting, FPOSupply, LedgerEntry,
   OpportunityDetail, Scheme, Supplier,
 } from "../db/types";
 import { useSpeech } from "../hooks/useSpeech";
@@ -26,13 +37,15 @@ import {
 import { CourseCard, EmptyHint, SectionCard, SectionCardRow, Segmented } from "../components/common";
 import { BarChart } from "../components/charts";
 import { MarketLinkedGrowthPlanning, Kv } from "./market-readiness";
+import { ConnectionsPanel } from "./connections";
+import { OrdersPanel } from "./orders";
 
 const inr = (n: number) => n.toLocaleString("en-IN");
 
 /** The active FPO, loaded from SQLite. `null` until the first read resolves. */
 function useActiveFpo(): { fpoId: string; fpo: FPO | null } {
   const { activeFpoId } = useApp();
-  const [fpo] = useDbQuery<FPO | null>(
+  const fpo = useDbQuery<FPO | null>(
     () => fpoRepo.getFpoById(activeFpoId),
     [activeFpoId],
     null,
@@ -42,10 +55,22 @@ function useActiveFpo(): { fpoId: string; fpo: FPO | null } {
 
 /* ========= MANAGE & GROW ========= */
 
+/** Badge showing how many replies a posted request has drawn. */
+function ResponseBadge({ total, pending }: { total: number; pending: number }) {
+  if (total === 0) return <Muted>No replies yet</Muted>;
+  if (pending > 0) {
+    return <Badge color={colors.fpoForeground} bg={colors.fpo}>{`${pending} awaiting you`}</Badge>;
+  }
+  return <Badge color={colors.mutedForeground} bg={colors.muted}>{`${total} replied`}</Badge>;
+}
+
 export function PostRequestSection() {
-  const { fpoId } = useActiveFpo();
-  const [supply, reloadSupply] = useDbQuery<FPOSupply[]>(() => fpoRepo.listSupply(fpoId), [fpoId], []);
-  const [needs, reloadNeeds] = useDbQuery<InputNeed[]>(() => fpoRepo.listInputNeeds(fpoId), [fpoId], []);
+  const { session } = useApp();
+  const { fpo } = useActiveFpo();
+  const supply = useDbQuery<RequestRow[]>(
+    () => requestRepo.listMyRequests(session, "commodity_supply"), [session?.partyId], []);
+  const needs = useDbQuery<RequestRow[]>(
+    () => requestRepo.listMyRequests(session, "input_demand"), [session?.partyId], []);
 
   return (
     <>
@@ -54,21 +79,42 @@ export function PostRequestSection() {
           <TitleWithIcon icon={<Package size={16} color={colors.fpo} />} title="Commodity supply request" />
         </CardHeader>
         <CardContent>
-          <Muted style={{ marginBottom: spacing.sm }}>What your FPO can supply — matched with buyers.</Muted>
+          <Muted style={{ marginBottom: spacing.sm }}>
+            What your FPO can supply. Buyers searching for these commodities see these
+            postings and can reply to them.
+          </Muted>
           <Table
-            minWidth={400}
+            minWidth={520}
             columns={[
               { key: "commodity", label: "Commodity", flex: 1.3 },
               { key: "grade", label: "Grade" },
               { key: "qty", label: "Qty (MT)", align: "right" },
               { key: "window", label: "Harvest window", flex: 1.4 },
+              { key: "replies", label: "Replies", flex: 1.3 },
             ]}
-            rows={supply.map((x) => ({ commodity: x.commodity, grade: x.grade, qty: String(x.qty_mt), window: x.harvest_window }))}
+            rows={supply.map((x) => ({
+              commodity: x.item,
+              grade: x.grade,
+              qty: String(x.qty),
+              window: x.windowLabel,
+              replies: <ResponseBadge total={x.responseCount} pending={x.pendingCount} />,
+            }))}
           />
           <AddCommodityForm onAdd={async (x) => {
-            await fpoRepo.insertSupply(fpoId, x);
-            reloadSupply();
-            toast.success(`${x.commodity} added.`);
+            try {
+              await requestRepo.createRequest(session, {
+                kind: "commodity_supply",
+                item: x.commodity,
+                grade: x.grade,
+                qty: x.qty_mt,
+                unit: "MT",
+                windowLabel: x.harvest_window,
+                district: fpo?.district ?? null,
+              });
+              toast.success(`${x.commodity} posted. Matching buyers can now reply.`);
+            } catch (e) {
+              toast.error(describeWriteError(e, "Could not post that supply request."));
+            }
           }} />
         </CardContent>
       </Card>
@@ -79,23 +125,45 @@ export function PostRequestSection() {
         </CardHeader>
         <CardContent>
           <Muted style={{ marginBottom: spacing.sm }}>
-            Inputs the FPO needs to procure for its members — matched with suppliers.
+            Inputs the FPO needs to procure for its members. Suppliers in these
+            categories see these postings and can quote against them.
           </Muted>
           <Table
-            minWidth={480}
+            minWidth={520}
             columns={[
               { key: "item", label: "Item", flex: 1.6 },
               { key: "category", label: "Category" },
               { key: "qty", label: "Qty" },
               { key: "window", label: "Window" },
-              { key: "notes", label: "Notes" },
+              { key: "replies", label: "Quotes", flex: 1.3 },
             ]}
-            rows={needs.map((n) => ({ item: n.item, category: n.category, qty: n.qty, window: n.window, notes: n.notes ?? "—" }))}
+            rows={needs.map((n) => ({
+              item: n.item,
+              category: n.category,
+              qty: formatQuantity(n.qty, n.unit, n.qtyLabel),
+              window: n.windowLabel,
+              replies: <ResponseBadge total={n.responseCount} pending={n.pendingCount} />,
+            }))}
           />
           <AddNeedForm onAdd={async (n) => {
-            await fpoRepo.insertInputNeed(fpoId, n);
-            reloadNeeds();
-            toast.success(`${n.item} added to inputs needed.`);
+            try {
+              // Input quantities are typed freehand ("120 kg"), so the numeric
+              // value for matching is parsed out and the text kept for display.
+              const q = parseQuantity(n.qty);
+              await requestRepo.createRequest(session, {
+                kind: "input_demand",
+                item: n.item,
+                category: n.category,
+                qty: q.qty,
+                qtyLabel: q.label,
+                unit: q.unit,
+                windowLabel: n.window,
+                district: fpo?.district ?? null,
+              });
+              toast.success(`${n.item} posted. Suppliers can now quote.`);
+            } catch (e) {
+              toast.error(describeWriteError(e, "Could not post that input request."));
+            }
           }} />
         </CardContent>
       </Card>
@@ -103,13 +171,122 @@ export function PostRequestSection() {
   );
 }
 
-export function MeetingSection() {
-  const { fpoId } = useActiveFpo();
-  const [cum] = useDbQuery<FpoCumulative>(
-    () => fpoRepo.cumulativeFor(fpoId), [fpoId],
-    { totalMembers: 0, totalLandAcres: 0, cropwise: [] },
+/* ========= RESPONSES INBOX ========= */
+
+/**
+ * Replies other parties have sent to this FPO's postings.
+ *
+ * This is the receiving half of the loop: a buyer replying to a supply request
+ * and a supplier quoting an input request both land here, and accepting or
+ * rejecting writes back to a row the other party can see.
+ */
+export function ResponsesSection() {
+  const { session } = useApp();
+  const responses = useDbQuery<ResponseRow[]>(
+    () => requestRepo.listInboxResponses(session), [session?.partyId], []);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  async function decide(r: ResponseRow, decision: "accepted" | "rejected") {
+    if (busyId != null) return;
+    setBusyId(r.id);
+    try {
+      await requestRepo.decideResponse(session, r.id, decision);
+      toast.success(decision === "accepted"
+        ? `Accepted ${r.responderName}.`
+        : `Declined ${r.responderName}.`);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not record that decision."));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const pending = responses.filter((r) => r.status === "pending");
+  const decided = responses.filter((r) => r.status !== "pending");
+
+  return (
+    <>
+      <Card>
+        <CardHeader>
+          <TitleWithIcon icon={<Inbox size={16} color={colors.fpo} />} title="Replies to your postings" />
+        </CardHeader>
+        <CardContent>
+          {pending.length === 0 && (
+            <Muted>
+              No replies waiting. Post a commodity supply or an input requirement and
+              matching buyers and suppliers can respond here.
+            </Muted>
+          )}
+          {pending.map((r) => (
+            <View key={r.id} style={s.itemCard}>
+              <View style={s.rowBetween}>
+                <View style={{ flex: 1 }}>
+                  <Text size="sm" weight="700">{r.responderName}</Text>
+                  <Muted>{`${r.responderKind === "buyer" ? "Buyer" : r.responderKind === "supplier" ? "Supplier" : r.responderKind} · replied to ${r.requestItem}`}</Muted>
+                </View>
+                <Badge color={colors.fpoForeground} bg={colors.fpo}>Pending</Badge>
+              </View>
+
+              <Muted style={{ marginTop: spacing.sm }}>
+                {`Your posting: ${r.requestItem} · ${r.requestQtyLabel}`}
+              </Muted>
+              {r.offeredQty != null && (
+                <Muted>{`Offered: ${r.offeredQty} ${r.offeredPrice != null ? `at ₹${r.offeredPrice}` : ""}`}</Muted>
+              )}
+              {r.message !== "" && <Text size="sm" style={{ marginTop: spacing.sm }}>{`"${r.message}"`}</Text>}
+
+              <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
+                <Button size="sm" accent={colors.fpo} disabled={busyId === r.id}
+                  onPress={() => decide(r, "accepted")}>
+                  Accept
+                </Button>
+                <Button size="sm" variant="outline" accent={colors.fpo} disabled={busyId === r.id}
+                  onPress={() => decide(r, "rejected")}>
+                  Decline
+                </Button>
+              </View>
+            </View>
+          ))}
+        </CardContent>
+      </Card>
+
+      <OrdersPanel accent={colors.fpo} />
+
+      <ConnectionsPanel accent={colors.fpo} />
+
+      {decided.length > 0 && (
+        <Card>
+          <CardHeader><CardTitle>Already decided</CardTitle></CardHeader>
+          <CardContent>
+            <Table
+              minWidth={480}
+              columns={[
+                { key: "who", label: "Party", flex: 1.6 },
+                { key: "item", label: "Posting", flex: 1.4 },
+                { key: "status", label: "Outcome", flex: 1 },
+              ]}
+              rows={decided.map((r) => ({
+                who: r.responderName,
+                item: r.requestItem,
+                status: r.status === "accepted"
+                  ? <Badge color="#ffffff" bg={colors.farmer}>Accepted</Badge>
+                  : <Badge color={colors.mutedForeground} bg={colors.muted}>Declined</Badge>,
+              }))}
+            />
+          </CardContent>
+        </Card>
+      )}
+    </>
   );
-  const [meetings, reloadMeetings] = useDbQuery<FpoMeeting[]>(() => fpoRepo.listMeetings(fpoId), [fpoId], []);
+}
+
+export function MeetingSection() {
+  const { session } = useApp();
+  const { fpoId } = useActiveFpo();
+  const meetings = useDbQuery<FpoMeetingRow[]>(() => fpoRepo.listMeetings(fpoId), [fpoId], []);
+  // The real number of active members, not the seeded `fpos.members` column.
+  const memberCount = useDbQuery<number>(
+    () => membershipRepo.countActiveMembers(fpoId), [fpoId], 0);
 
   return (
     <Card>
@@ -124,12 +301,37 @@ export function MeetingSection() {
             { key: "time", label: "Time", flex: 0.6 },
             { key: "agenda", label: "Agenda", flex: 2 },
             { key: "venue", label: "Venue", flex: 1.3 },
+            { key: "invited", label: "Invitations", flex: 1.2 },
           ]}
-          rows={meetings.map((m) => ({ date: m.date, time: m.time, agenda: m.agenda, venue: m.venue }))}
+          rows={meetings.map((m) => ({
+            date: m.date, time: m.time, agenda: m.agenda, venue: m.venue,
+            invited: m.invitedCount === 0
+              ? <Muted>Not sent</Muted>
+              : <Badge color={colors.mutedForeground} bg={colors.muted}>{`${m.invitedCount} invited`}</Badge>,
+          }))}
         />
         <AddMeetingForm
-          onAdd={async (m) => { await fpoRepo.insertMeeting(fpoId, m); reloadMeetings(); }}
-          memberCount={cum.totalMembers}
+          onAdd={async (m) => {
+            try {
+              const meetingId = await fpoRepo.insertMeeting(fpoId, m);
+              return meetingId;
+            } catch (e) {
+              toast.error(describeWriteError(e, "Could not log that meeting."));
+              return null;
+            }
+          }}
+          onNotify={async (meetingId) => {
+            try {
+              const sent = await membershipRepo.inviteMembersToMeeting(session, meetingId);
+              toast.success(sent === 0
+                ? "No active members to notify yet."
+                : `${sent} member ${sent === 1 ? "farmer" : "farmers"} notified.`);
+            } catch (e) {
+              toast.error(describeWriteError(e, "Could not send those invitations."));
+            }
+          }}
+          memberCount={memberCount}
+          latestMeetingId={meetings[0]?.id ?? null}
         />
       </CardContent>
     </Card>
@@ -137,8 +339,15 @@ export function MeetingSection() {
 }
 
 export function BookkeepingSection() {
+  const { session } = useApp();
   const { fpoId, fpo } = useActiveFpo();
-  const [ledger, reloadLedger] = useDbQuery<LedgerEntry[]>(() => fpoRepo.listLedger(fpoId), [fpoId], []);
+  const ledger = useDbQuery<LedgerEntry[]>(() => fpoRepo.listLedger(fpoId), [fpoId], []);
+  // Parties this FPO has actually dealt with — its members, its accepted
+  // connections and anyone it has traded with. A picker over these replaces the
+  // free-text "Buyer/Seller ID" field, which is why counterparties used to be a
+  // mix of farmer ids, buyer ids and words like FPO-POOL.
+  const counterparties = useDbQuery<{ partyId: number; name: string; kind: string }[]>(
+    () => orderRepo.listTradedParties(session), [session?.partyId], []);
 
   return (
     <Card>
@@ -170,21 +379,26 @@ export function BookkeepingSection() {
             type: e.type === "Income"
               ? <Badge color="#ffffff" bg={colors.farmer}>Income</Badge>
               : <Badge color={colors.mutedForeground} bg={colors.muted}>Expense</Badge>,
-            cp: <Text size="xxs" noTranslate>{e.counterpartyId ?? "—"}</Text>,
+            cp: <Text size="xxs" noTranslate>{e.counterpartyName !== "" ? e.counterpartyName : (e.counterpartyLabel ?? "—")}</Text>,
             amount: inr(e.amount),
             balance: inr(e.balance),
           }))}
         />
         <Muted style={{ marginTop: spacing.sm }}>
-          Buyer/Seller IDs link transactions across the app — e.g. MH-AH-2024-00831 appears in farmer Suresh Patil&apos;s transaction history.
+          Entries created by a paid order are posted automatically and carry the
+          counterparty and order reference, so they match the other side&apos;s records.
         </Muted>
         <AddEntry
           onAdd={async (entry) => {
-            await fpoRepo.insertLedgerEntry(fpoId, entry);
-            reloadLedger();
-            toast.success("Ledger entry added.");
+            try {
+              await fpoRepo.insertLedgerEntry(fpoId, entry);
+              toast.success("Ledger entry added.");
+            } catch (e) {
+              toast.error(describeWriteError(e, "Could not add that entry."));
+            }
           }}
           running={ledger.length > 0 ? ledger[ledger.length - 1].balance : 0}
+          counterparties={counterparties}
         />
       </CardContent>
     </Card>
@@ -221,16 +435,17 @@ export function ExpansionPlannerSection() {
 
 function OpportunitySizingPanel() {
   const { speak } = useSpeech();
+  const { session } = useApp();
   const { fpo } = useActiveFpo();
   const tier = fpo?.tier ?? "Tier 3";
-  const [scores] = useDbQuery<Record<string, number>>(
+  const scores = useDbQuery<Record<string, number>>(
     () => fpoRepo.getTierScores(tier), [tier],
     { financial: 0, operational: 0, infra: 0, governance: 0, market: 0 },
   );
-  const [opportunities] = useDbQuery<OpportunityDetail[]>(
+  const opportunities = useDbQuery<OpportunityDetail[]>(
     () => fpoRepo.getTierOpportunities(tier), [tier], [],
   );
-  const [mentors] = useDbQuery(() => contentRepo.listMentors(), [], []);
+  const mentors = useDbQuery(() => contentRepo.listMentors(), [], []);
   const [openOpp, setOpenOpp] = useState<OpportunityDetail | null>(null);
   const [openMentor, setOpenMentor] = useState<string | null>(null);
   const [mentorMsg, setMentorMsg] = useState("");
@@ -343,7 +558,15 @@ function OpportunitySizingPanel() {
             </View>
             <Input value={mentorMsg} onChangeText={setMentorMsg} multiline numberOfLines={3} />
             <Button accent={colors.fpo} icon={<Send size={16} color="#ffffff" />}
-              onPress={() => { toast.success(`Message sent to ${mentor.name}.`); setOpenMentor(null); }}>
+              onPress={async () => {
+                try {
+                  await contactAdvisor(session, "mentor", mentor.name, mentorMsg);
+                  toast.success(`Message sent to ${mentor.name}. Replies appear under Replies.`);
+                  setOpenMentor(null);
+                } catch (e) {
+                  toast.error(describeWriteError(e, `Could not reach ${mentor.name}.`));
+                }
+              }}>
               Send message
             </Button>
           </>
@@ -353,16 +576,134 @@ function OpportunitySizingPanel() {
   );
 }
 
+/**
+ * Opens an advisory connection with a service provider and posts the first
+ * message into its thread. Mentors and experts both route through here — they are
+ * `service_providers` rows with a party, so the message is stored rather than
+ * discarded when the dialog closes.
+ */
+async function contactAdvisor(
+  session: Parameters<typeof networkRepo.requestConnection>[0],
+  providerType: "mentor" | "expert",
+  name: string,
+  message: string,
+): Promise<void> {
+  const id = await networkRepo.providerPartyIdByName(providerType, name);
+  if (id == null) throw new Error("provider not reachable");
+  await networkRepo.requestConnection(session, {
+    otherPartyId: id,
+    relationType: "advisory",
+    message,
+    openThread: true,
+  });
+}
+
 /* ========= FIND PARTNERS ========= */
 
+/**
+ * Open buyer demands this FPO can actually supply, plus the buyer directory.
+ *
+ * The demands half is new: a buyer's posted requirement was previously invisible
+ * to every FPO in the app, so a demand could never be answered. Replying here
+ * writes a `request_responses` row that lands in that buyer's inbox.
+ */
 export function LocateBuyerSection() {
+  const { session } = useApp();
   const { fpo } = useActiveFpo();
-  const [groups] = useDbQuery(() => marketRepo.buyersByCategory(), [], {});
-  const score = (i: number) => 92 - i * 6;
-  const fpoCommodities = fpo?.commodities ?? [];
+  const groups = useDbQuery(() => marketRepo.buyersByCategory(), [], {});
+  const fpoCommodities = useMemo(() => fpo?.commodities ?? [], [fpo]);
+
+  // One query per commodity the FPO deals in, flattened — a buyer demand only
+  // matters to this FPO if it is for something the FPO grows.
+  const demands = useDbQuery<RequestRow[]>(
+    async () => {
+      const lists = await Promise.all(fpoCommodities.map((c) =>
+        requestRepo.listOpenRequests({
+          kind: "commodity_demand", item: c, excludePartyId: session?.partyId,
+        })));
+      return lists.flat();
+    },
+    [fpoCommodities, session?.partyId],
+    [],
+  );
+
+  const distances = useDbQuery<Map<string, number>>(
+    () => readinessRepo.distanceMatrix(), [], new Map());
+  const [replyTo, setReplyTo] = useState<RequestRow | null>(null);
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+
+  // The FPO's available quantity for the demanded commodity, used for the score.
+  const availableFor = (commodity: string) =>
+    (fpo?.supply ?? [])
+      .filter((sup) => sup.commodity.toLowerCase() === commodity.toLowerCase())
+      .reduce((sum, sup) => sum + sup.qty_mt, 0);
+
+  const bestGradeFor = (commodity: string) =>
+    (fpo?.supply ?? []).find((sup) => sup.commodity.toLowerCase() === commodity.toLowerCase())?.grade ?? null;
+
+  async function send() {
+    if (replyTo == null || sending) return;
+    setSending(true);
+    try {
+      await requestRepo.respond(session, replyTo.id, {
+        message: message.trim() === "" ? null : message.trim(),
+        offeredQty: availableFor(replyTo.item),
+        offeredUnit: "MT",
+      });
+      setReplyTo(null);
+      setMessage("");
+      toast.success("Reply sent. The buyer can now accept or decline it.");
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not send that reply."));
+    } finally {
+      setSending(false);
+    }
+  }
 
   return (
     <>
+      <Card>
+        <CardHeader>
+          <TitleWithIcon icon={<ClipboardList size={16} color={colors.fpo} />} title="Open buyer requirements" />
+        </CardHeader>
+        <CardContent>
+          {demands.length === 0 && (
+            <Muted>No buyer has an open requirement for your commodities right now.</Muted>
+          )}
+          {demands.map((d) => {
+            const available = availableFor(d.item);
+            const breakdown = matchScore({
+              requiredQty: d.qty,
+              availableQty: available,
+              requiredGrade: d.grade,
+              offeredGrade: bestGradeFor(d.item),
+              distanceKm: readinessRepo.kmBetween(distances, fpo?.district, d.district),
+            });
+            return (
+              <View key={d.id} style={s.itemCard}>
+                <View style={s.rowBetween}>
+                  <View style={{ flex: 1 }}>
+                    <Text size="sm" weight="700">{d.authorName}</Text>
+                    <Muted>{`Wants ${d.qty} ${d.unit} ${d.item}${d.grade !== "" ? ` · Grade ${d.grade}` : ""}`}</Muted>
+                  </View>
+                  <Badge color={colors.fpoForeground} bg={colors.fpo}>{`${breakdown.score}% match`}</Badge>
+                </View>
+                <Muted style={{ marginTop: spacing.sm }}>{explainMatch(breakdown)}</Muted>
+                <Muted>{`You have ${available} MT open${d.windowLabel !== "" ? ` · needed by ${d.windowLabel}` : ""}`}</Muted>
+                <Button size="sm" accent={colors.fpo} style={{ marginTop: spacing.md }}
+                  onPress={() => {
+                    setReplyTo(d);
+                    setMessage(`We can supply ${Math.min(available, d.qty)} MT of ${d.item}.`);
+                  }}>
+                  Reply to this requirement
+                </Button>
+              </View>
+            );
+          })}
+        </CardContent>
+      </Card>
+
       {(["Spot", "Relationship", "Development"] as const).map((cat) => {
         const list = (groups[cat] ?? []).filter((b) => b.commodities.some((c) => fpoCommodities.includes(c)));
         if (list.length === 0) return null;
@@ -378,14 +719,13 @@ export function LocateBuyerSection() {
               </View>
             </CardHeader>
             <CardContent>
-              {list.map((b, i) => (
+              {list.map((b) => (
                 <View key={b.id} style={s.itemCard}>
                   <View style={s.rowBetween}>
                     <View style={{ flex: 1 }}>
                       <Text size="sm" weight="700">{b.name}</Text>
                       <Muted>{`${b.type} · ${b.location}`}</Muted>
                     </View>
-                    <Badge color={colors.fpoForeground} bg={colors.fpo}>{`${score(i)}% match`}</Badge>
                   </View>
                   <Muted style={{ marginTop: spacing.sm }}>
                     {"Commodity: "}
@@ -393,9 +733,12 @@ export function LocateBuyerSection() {
                     {" · Volume: "}
                     <Text size="xs">{`${b.typicalVolumeMT} MT/yr`}</Text>
                   </Muted>
-                  <Button size="sm" accent={colors.fpo} style={{ marginTop: spacing.md }}
-                    onPress={() => toast.success(`Connection request sent to ${b.name}.`)}>
-                    Connect
+                  {/* No match badge here: this is a directory of who exists, not a
+                      ranking. Scores belong on the requirement cards above, where
+                      there is a quantity and a grade to score against. */}
+                  <Button size="sm" variant="outline" accent={colors.fpo} style={{ marginTop: spacing.md }}
+                    onPress={() => toast.message(`${b.name} buys ${b.commodities.join(", ")} — ${b.qualitySpecs}`)}>
+                    View requirements
                   </Button>
                 </View>
               ))}
@@ -403,26 +746,67 @@ export function LocateBuyerSection() {
           </Card>
         );
       })}
+
+      <Dialog visible={replyTo != null} onClose={() => setReplyTo(null)}
+        title={replyTo ? `Reply to ${replyTo.authorName}` : undefined}>
+        {replyTo != null && (
+          <>
+            <Kv k="Requirement" v={`${replyTo.qty} ${replyTo.unit} ${replyTo.item}`} />
+            <Kv k="You can offer" v={`${availableFor(replyTo.item)} MT`} />
+            <Input value={message} onChangeText={setMessage} multiline numberOfLines={3} />
+            <Button accent={colors.fpo} disabled={sending}
+              icon={<Send size={16} color="#ffffff" />} onPress={send}>
+              {sending ? "Sending…" : "Send reply"}
+            </Button>
+          </>
+        )}
+      </Dialog>
     </>
   );
 }
 
 export function LocateSupplierSection() {
-  const [suppliers] = useDbQuery<Supplier[]>(() => marketRepo.listSuppliers(), [], []);
+  const { session } = useApp();
+  const suppliers = useDbQuery<Supplier[]>(() => marketRepo.listSuppliers(), [], []);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  async function connect(sup: Supplier) {
+    if (busyId != null) return;
+    setBusyId(sup.id);
+    try {
+      const partyId = await networkRepo.partyIdFor("supplier", sup.id);
+      if (partyId == null) {
+        toast.error("That supplier is not reachable yet.");
+        return;
+      }
+      await networkRepo.requestConnection(session, {
+        otherPartyId: partyId,
+        relationType: "supply",
+        message: `We would like a quote for ${sup.categories.join(", ")}.`,
+        openThread: true,
+      });
+      toast.success(`Quote request sent to ${sup.name}.`);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not send that request."));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
         <TitleWithIcon icon={<Package size={16} color={colors.fpo} />} title="Matched input suppliers" />
       </CardHeader>
       <CardContent>
-        {suppliers.map((sup, i) => (
+        {suppliers.map((sup) => (
           <View key={sup.id} style={s.itemCard}>
             <View style={s.rowBetween}>
               <View style={{ flex: 1 }}>
                 <Text size="sm" weight="700">{sup.name}</Text>
                 <Muted>{`${sup.brand} · ${sup.location}`}</Muted>
               </View>
-              <Badge color={colors.fpoForeground} bg={colors.fpo}>{`${92 - i * 5}% match`}</Badge>
+
             </View>
             <View style={{ marginTop: spacing.sm, gap: 2 }}>
               <Muted>{"Category: "}<Text size="xs">{sup.categories.join(", ")}</Text></Muted>
@@ -431,8 +815,8 @@ export function LocateSupplierSection() {
               <Muted>{"Lead time: "}<Text size="xs">{`${sup.leadTimeDays} days · MOQ ${sup.minOrder}`}</Text></Muted>
             </View>
             <Button size="sm" accent={colors.fpo} style={{ marginTop: spacing.md }}
-              onPress={() => toast.success(`Quote requested from ${sup.name}.`)}>
-              Connect
+              disabled={busyId === sup.id} onPress={() => connect(sup)}>
+              {busyId === sup.id ? "Sending…" : "Request a quote"}
             </Button>
           </View>
         ))}
@@ -442,7 +826,7 @@ export function LocateSupplierSection() {
 }
 
 export function LogisticsSection() {
-  const [providers] = useDbQuery(() => contentRepo.listLogisticsProviders(), [], []);
+  const providers = useDbQuery(() => contentRepo.listLogisticsProviders(), [], []);
   return (
     <Card>
       <CardHeader>
@@ -469,9 +853,37 @@ export function LogisticsSection() {
 }
 
 export function AccessCreditSection() {
+  const { session } = useApp();
   const { fpo } = useActiveFpo();
-  const [lenders] = useDbQuery(() => contentRepo.listLenders(), [], []);
+  // Lenders read from `service_providers` now, so each one carries a party and
+  // an application has somewhere to land.
+  const lenders = useDbQuery(() => serviceRepo.listProviders("lender"), [], []);
+  const applications = useDbQuery<ServiceRequestRow[]>(
+    () => serviceRepo.listMyRequests(session), [session?.partyId], []);
   const [openProposal, setOpenProposal] = useState(false);
+  const [busy, setBusy] = useState<number | null>(null);
+
+  const statusWith = (partyId: number) =>
+    applications.find((a) => a.providerPartyId === partyId && a.serviceType === "credit");
+
+  async function apply(partyId: number, name: string, amount: number | null) {
+    if (busy != null) return;
+    setBusy(partyId);
+    try {
+      await serviceRepo.request(session, {
+        providerPartyId: partyId,
+        serviceType: "credit",
+        subject: `Working capital for ${fpo?.name ?? "our FPO"}`,
+        details: `Compliance score ${fpo?.complianceScore ?? 0}/100. ${fpo?.members ?? 0} members.`,
+        amountRequested: amount,
+      });
+      toast.success(`Application sent to ${name}.`);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not send that application."));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   return (
     <>
@@ -480,19 +892,34 @@ export function AccessCreditSection() {
           <TitleWithIcon icon={<Banknote size={16} color={colors.fpo} />} title="Credit Facilitation" />
         </CardHeader>
         <CardContent>
-          {lenders.map((l) => (
-            <View key={l.name} style={s.itemCard}>
-              <Text size="sm" weight="700">{l.name}</Text>
-              <Muted>{l.product}</Muted>
-              <View style={{ flexDirection: "row", marginTop: 6 }}>
-                <Badge color={colors.mutedForeground} bg={colors.muted}>{l.eligibility}</Badge>
+          {lenders.map((l) => {
+            const application = statusWith(l.partyId);
+            return (
+              <View key={l.id} style={s.itemCard}>
+                <View style={s.rowBetween}>
+                  <Text size="sm" weight="700" style={{ flex: 1 }}>{l.name}</Text>
+                  {application != null && (
+                    <Badge
+                      color={application.status === "approved" ? "#ffffff" : colors.mutedForeground}
+                      bg={application.status === "approved" ? colors.farmer : colors.muted}>
+                      {application.status.replace("_", " ")}
+                    </Badge>
+                  )}
+                </View>
+                <Muted>{l.note}</Muted>
+                {l.feeNote !== "" && (
+                  <View style={{ flexDirection: "row", marginTop: 6 }}>
+                    <Badge color={colors.mutedForeground} bg={colors.muted}>{l.feeNote}</Badge>
+                  </View>
+                )}
+                <Button size="sm" variant="outline" accent={colors.fpo} style={{ marginTop: spacing.sm }}
+                  disabled={busy === l.partyId}
+                  onPress={() => apply(l.partyId, l.name, 4800000)}>
+                  {application == null ? "Apply" : "Update application"}
+                </Button>
               </View>
-              <Button size="sm" variant="outline" accent={colors.fpo} style={{ marginTop: spacing.sm }}
-                onPress={() => toast.success(`Application initiated with ${l.name}.`)}>
-                Apply
-              </Button>
-            </View>
-          ))}
+            );
+          })}
         </CardContent>
       </Card>
 
@@ -512,8 +939,27 @@ export function AccessCreditSection() {
         <Kv k="Projected revenue uplift" v="₹1.6 Cr / season (+22%)" />
         <Kv k="Compliance score" v={`${fpo?.complianceScore ?? 0}/100`} />
         <Kv k="Repayment" v="12 months · seasonal bullet" />
+        {/* Sends the proposal to every lender listed, as a real application each. */}
         <Button accent={colors.fpo}
-          onPress={() => { toast.success("Proposal shared with NABARD & Samunnati."); setOpenProposal(false); }}>
+          onPress={async () => {
+            try {
+              for (const l of lenders) {
+                await serviceRepo.request(session, {
+                  providerPartyId: l.partyId,
+                  serviceType: "credit",
+                  subject: `Bankable proposal — ${fpo?.name ?? ""}`,
+                  details: "Working capital for kharif aggregation. 12 months, seasonal bullet.",
+                  amountRequested: 4800000,
+                });
+              }
+              toast.success(lenders.length === 0
+                ? "No lenders are listed yet."
+                : `Proposal sent to ${lenders.length} lender${lenders.length === 1 ? "" : "s"}.`);
+              setOpenProposal(false);
+            } catch (e) {
+              toast.error(describeWriteError(e, "Could not share that proposal."));
+            }
+          }}>
           Share with lenders
         </Button>
       </Dialog>
@@ -523,7 +969,7 @@ export function AccessCreditSection() {
 
 export function GovtSchemesSection() {
   const { fpo } = useActiveFpo();
-  const [allSchemes] = useDbQuery<Scheme[]>(() => contentRepo.listFpoSchemes(), [], []);
+  const allSchemes = useDbQuery<Scheme[]>(() => contentRepo.listFpoSchemes(), [], []);
   const [body, setBody] = useState<"all" | "Central" | "State (Maharashtra)">("all");
   const schemes = allSchemes.filter((x) => body === "all" || x.body === body);
 
@@ -586,8 +1032,12 @@ export function GovtSchemesSection() {
 }
 
 export function ComplianceSection() {
-  const [explainer] = useDbQuery(() => contentRepo.listComplianceExplainer(), [], []);
-  const [partners] = useDbQuery(() => contentRepo.listCompliancePartners(), [], []);
+  const { session } = useApp();
+  const explainer = useDbQuery(() => contentRepo.listComplianceExplainer(), [], []);
+  const partners = useDbQuery(() => serviceRepo.listProviders("compliance"), [], []);
+  const requests = useDbQuery<ServiceRequestRow[]>(
+    () => serviceRepo.listMyRequests(session), [session?.partyId], []);
+  const [busy, setBusy] = useState<number | null>(null);
   return (
     <>
       <Card>
@@ -607,19 +1057,47 @@ export function ComplianceSection() {
       <Card>
         <CardHeader><CardTitle>Connect with Professionals</CardTitle></CardHeader>
         <CardContent>
-          {partners.map((p) => (
-            <View key={p.name} style={s.itemCard}>
-              <Text size="sm" weight="600">{p.name}</Text>
-              <Muted>{p.svc}</Muted>
-              <View style={{ flexDirection: "row", marginTop: 6 }}>
-                <Badge color={colors.fpo} bg={colors.fpoSoft}>{p.fee}</Badge>
+          {partners.map((p) => {
+            const existing = requests.find(
+              (r) => r.providerPartyId === p.partyId && r.serviceType === "compliance");
+            return (
+              <View key={p.id} style={s.itemCard}>
+                <View style={s.rowBetween}>
+                  <Text size="sm" weight="600" style={{ flex: 1 }}>{p.name}</Text>
+                  {existing != null && (
+                    <Badge color={colors.mutedForeground} bg={colors.muted}>
+                      {existing.status.replace("_", " ")}
+                    </Badge>
+                  )}
+                </View>
+                <Muted>{p.note}</Muted>
+                {p.feeNote !== "" && (
+                  <View style={{ flexDirection: "row", marginTop: 6 }}>
+                    <Badge color={colors.fpo} bg={colors.fpoSoft}>{p.feeNote}</Badge>
+                  </View>
+                )}
+                <Button full size="sm" accent={colors.fpo} style={{ marginTop: spacing.sm }}
+                  disabled={busy === p.partyId}
+                  onPress={async () => {
+                    setBusy(p.partyId);
+                    try {
+                      await serviceRepo.request(session, {
+                        providerPartyId: p.partyId,
+                        serviceType: "compliance",
+                        subject: p.note === "" ? "Compliance support" : p.note,
+                      });
+                      toast.success(`Request sent to ${p.name}.`);
+                    } catch (e) {
+                      toast.error(describeWriteError(e, "Could not send that request."));
+                    } finally {
+                      setBusy(null);
+                    }
+                  }}>
+                  {existing == null ? "Request service" : "Update request"}
+                </Button>
               </View>
-              <Button full size="sm" accent={colors.fpo} style={{ marginTop: spacing.sm }}
-                onPress={() => toast.success(`Service requested from ${p.name}.`)}>
-                Request service
-              </Button>
-            </View>
-          ))}
+            );
+          })}
         </CardContent>
       </Card>
     </>
@@ -630,8 +1108,8 @@ export function ComplianceSection() {
 
 export function CapacityBuildingSection() {
   const [tab, setTab] = useState<null | "value" | "mgmt">(null);
-  const [valueCourses] = useDbQuery(() => contentRepo.listCourses("value"), [], []);
-  const [mgmtCourses] = useDbQuery(() => contentRepo.listCourses("mgmt"), [], []);
+  const valueCourses = useDbQuery(() => contentRepo.listCourses("value"), [], []);
+  const mgmtCourses = useDbQuery(() => contentRepo.listCourses("mgmt"), [], []);
   return (
     <>
       {/* Cards, not pill capsules — consistent with every other section selector
@@ -685,9 +1163,10 @@ export function CapacityBuildingSection() {
 }
 
 export function ExpertNetworkSection() {
+  const { session } = useApp();
   const [openExpert, setOpenExpert] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
-  const [experts] = useDbQuery(() => contentRepo.listExperts(), [], []);
+  const experts = useDbQuery(() => contentRepo.listExperts(), [], []);
   const expert = experts.find((e) => e.name === openExpert);
 
   return (
@@ -720,7 +1199,15 @@ export function ExpertNetworkSection() {
             </View>
             <Input value={msg} onChangeText={setMsg} multiline numberOfLines={3} />
             <Button accent={colors.fpo} icon={<Send size={16} color="#ffffff" />}
-              onPress={() => { toast.success(`Message sent to ${expert.name}.`); setOpenExpert(null); }}>
+              onPress={async () => {
+                try {
+                  await contactAdvisor(session, "expert", expert.name, msg);
+                  toast.success(`Message sent to ${expert.name}.`);
+                  setOpenExpert(null);
+                } catch (e) {
+                  toast.error(describeWriteError(e, `Could not reach ${expert.name}.`));
+                }
+              }}>
               Send message
             </Button>
           </>
@@ -732,10 +1219,22 @@ export function ExpertNetworkSection() {
 
 /* ========= KNOW MY FPO ========= */
 
+/**
+ * A blank or "None" processing capability means the FPO has none. Anything else
+ * is the description of what it has — which is how the single free-text field on
+ * screen maps onto the two columns behind it.
+ */
+function readProcessing(text: string): { has: boolean; type: string | null } {
+  const t = text.trim();
+  const has = t !== "" && t.toLowerCase() !== "none";
+  return { has, type: has ? t : null };
+}
+
 export function FpoProfileSection() {
   const { width } = useWindowDimensions();
+  const { session } = useApp();
   const { fpoId, fpo } = useActiveFpo();
-  const [cum] = useDbQuery<FpoCumulative>(
+  const cum = useDbQuery<FpoCumulative>(
     () => fpoRepo.cumulativeFor(fpoId), [fpoId],
     { totalMembers: 0, totalLandAcres: 0, cropwise: [] },
   );
@@ -744,9 +1243,11 @@ export function FpoProfileSection() {
   const [name, setName] = useState("");
   const [regNo, setRegNo] = useState("");
   const [district, setDistrict] = useState("");
+  const [block, setBlock] = useState("");
   const [inc, setInc] = useState("");
   const [warehouse, setWarehouse] = useState("");
   const [processing, setProcessing] = useState("");
+  const [saving, setSaving] = useState(false);
 
   // The FPO now arrives asynchronously from SQLite, so the editable fields are
   // populated when it lands rather than in the useState initialisers.
@@ -754,11 +1255,39 @@ export function FpoProfileSection() {
     if (fpo == null) return;
     setName(fpo.name);
     setRegNo(fpo.regNo);
-    setDistrict(`${fpo.district} / ${fpo.block}`);
+    setDistrict(fpo.district);
+    setBlock(fpo.block);
     setInc(fpo.incorporated);
     setWarehouse(String(fpo.warehouseMT));
     setProcessing(fpo.processing.has ? fpo.processing.type ?? "None" : "None");
   }, [fpo]);
+
+  async function save() {
+    if (saving) return;
+    if (name.trim() === "") {
+      toast.error("Name cannot be empty.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const proc = readProcessing(processing);
+      await fpoRepo.updateFpoProfile(session, {
+        name: name.trim(),
+        regNo: regNo.trim(),
+        district: district.trim(),
+        block: block.trim(),
+        incorporated: inc.trim(),
+        warehouseMT: Number(warehouse) || 0,
+        processingHas: proc.has,
+        processingType: proc.type,
+      });
+      toast.success("FPO details saved.");
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not save FPO details."));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <>
@@ -769,13 +1298,16 @@ export function FpoProfileSection() {
         <CardContent>
           <Field label="Name"><Input value={name} onChangeText={setName} /></Field>
           <Field label="Registration No."><Input value={regNo} onChangeText={setRegNo} /></Field>
-          <Field label="District / Block"><Input value={district} onChangeText={setDistrict} /></Field>
+          {/* Two fields, not one "District / Block": the combined value read well
+              but could not be split back into two columns once edited. */}
+          <Field label="District"><Input value={district} onChangeText={setDistrict} /></Field>
+          <Field label="Block"><Input value={block} onChangeText={setBlock} /></Field>
           <Field label="Incorporated"><Input value={inc} onChangeText={setInc} /></Field>
           <Field label="Warehouse capacity (MT)"><Input value={warehouse} onChangeText={setWarehouse} keyboardType="numeric" /></Field>
-          <Field label="Processing capability"><Input value={processing} onChangeText={setProcessing} /></Field>
+          <Field label="Processing capability"><Input value={processing} onChangeText={setProcessing} placeholder="None" /></Field>
           <Button accent={colors.fpo} style={{ alignSelf: "flex-end" }}
-            onPress={() => toast.success("FPO details saved.")}>
-            Save
+            disabled={saving} onPress={save}>
+            {saving ? "Saving…" : "Save"}
           </Button>
         </CardContent>
       </Card>
@@ -830,41 +1362,130 @@ export function FpoProfileSection() {
 type Status = "Active" | "At-risk" | "Dormant";
 
 export function RelationshipsSection() {
+  const { session } = useApp();
   const { fpoId } = useActiveFpo();
-  const [cum] = useDbQuery<FpoCumulative>(
-    () => fpoRepo.cumulativeFor(fpoId), [fpoId],
-    { totalMembers: 0, totalLandAcres: 0, cropwise: [] },
-  );
-  const [members] = useDbQuery<MemberEngagement[]>(() => fpoRepo.listMemberEngagement(fpoId), [fpoId], []);
-  const [feedback] = useDbQuery(() => contentRepo.listSellerFeedback(fpoId), [fpoId], []);
+  // Engagement is derived from real transactions and trainings now — see the
+  // v_member_engagement view — instead of read from a frozen roster whose rows
+  // were matched to farmers by name.
+  const members = useDbQuery<EngagementRow[]>(
+    () => membershipRepo.listEngagement(fpoId), [fpoId], []);
+  const applicants = useDbQuery<MembershipRow[]>(
+    () => membershipRepo.listApplicants(session), [session?.partyId], []);
+  // The reviews buyers actually wrote, not the separate seller_feedback table
+  // that was keyed by the buyer's name in a text column.
+  const myPartyId = session?.partyId ?? 0;
+  const feedback = useDbQuery<ReviewRow[]>(
+    () => (myPartyId === 0 ? Promise.resolve([]) : reviewRepo.listReviewsAbout(myPartyId)),
+    [myPartyId], []);
+  const reputation = useDbQuery(
+    () => (myPartyId === 0 ? Promise.resolve({ rating: 0, reviewCount: 0 }) : reviewRepo.getReputation(myPartyId)),
+    [myPartyId], { rating: 0, reviewCount: 0 });
   // Business logic preserved verbatim from the web app.
   const procurable = members.filter((m) => m.status === "Active").reduce((a, m) => a + m.soldThroughFPO * 1.6, 0);
   const [filters, setFilters] = useState<Record<Status, boolean>>({ "Active": true, "At-risk": true, "Dormant": true });
   const filtered = useMemo(() => members.filter((m) => filters[m.status]), [members, filters]);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  async function decide(m: MembershipRow, decision: "active" | "rejected") {
+    if (busyId != null) return;
+    setBusyId(m.id);
+    try {
+      await membershipRepo.decide(session, m.id, decision);
+      toast.success(decision === "active"
+        ? `${m.farmerName} is now a member.`
+        : `${m.farmerName}'s application was declined.`);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not record that decision."));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function intervene(m: EngagementRow) {
+    try {
+      await membershipRepo.openMemberThread(session, m.membershipId,
+        `Namaste ${m.name.split(" ")[0]}, we noticed you have not sold through the FPO recently. Can we help?`);
+      toast.success(`Message sent to ${m.name}.`);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not reach that member."));
+    }
+  }
 
   return (
     <>
       <Card>
         <CardHeader>
+          <TitleWithIcon icon={<UserPlus size={16} color={colors.fpo} />}
+            title={`Membership applications (${applicants.length})`} />
+        </CardHeader>
+        <CardContent>
+          {applicants.length === 0 && (
+            <Muted>No applications waiting. Farmers who apply from their My FPO screen appear here.</Muted>
+          )}
+          {applicants.map((m) => (
+            <View key={m.id} style={s.itemCard}>
+              <View style={s.rowBetween}>
+                <View style={{ flex: 1 }}>
+                  <Text size="sm" weight="700">{m.farmerName}</Text>
+                  <Muted>{`${m.village}, ${m.district} · ${m.landAcres} acres`}</Muted>
+                </View>
+                <Badge color={colors.fpoForeground} bg={colors.fpo}>Pending</Badge>
+              </View>
+              {m.crops.length > 0 && <Muted style={{ marginTop: 4 }}>{`Crops: ${m.crops.join(", ")}`}</Muted>}
+              {m.contactPhone !== "" && <Muted noTranslate>{m.contactPhone}</Muted>}
+              {m.applicationNote !== "" && (
+                <Text size="sm" style={{ marginTop: spacing.sm }}>{`"${m.applicationNote}"`}</Text>
+              )}
+              <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
+                <Button size="sm" accent={colors.fpo} disabled={busyId === m.id}
+                  onPress={() => decide(m, "active")}>
+                  Approve
+                </Button>
+                <Button size="sm" variant="outline" accent={colors.fpo} disabled={busyId === m.id}
+                  onPress={() => decide(m, "rejected")}>
+                  Decline
+                </Button>
+              </View>
+            </View>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <TitleWithIcon icon={<Star size={16} color={colors.fpo} />} title="Seller feedback (from buyers)" />
         </CardHeader>
         <CardContent>
-          <Table
-            minWidth={560}
-            columns={[
-              { key: "buyer", label: "Buyer", flex: 1.6 },
-              { key: "commodity", label: "Commodity" },
-              { key: "qty", label: "Qty (MT)", align: "right" },
-              { key: "date", label: "Date", flex: 1.2 },
-              { key: "rating", label: "Rating" },
-              { key: "note", label: "Note", flex: 1.8 },
-            ]}
-            rows={feedback.map((f) => ({
-              buyer: f.buyer, commodity: f.commodity, qty: String(f.qty_mt), date: f.date,
-              rating: <Text size="xs" noTranslate>{"★".repeat(f.stars) + "☆".repeat(5 - f.stars)}</Text>,
-              note: <Muted>{f.note}</Muted>,
-            }))}
-          />
+          {feedback.length === 0 && (
+            <Muted>No reviews yet. A counterparty can review you once an order is delivered.</Muted>
+          )}
+          {feedback.length > 0 && (
+            <>
+              <View style={{ flexDirection: "row", marginBottom: spacing.sm }}>
+                <Badge color={colors.fpoForeground} bg={colors.fpo}>
+                  {`${reputation.rating}★ from ${reputation.reviewCount} ${reputation.reviewCount === 1 ? "review" : "reviews"}`}
+                </Badge>
+              </View>
+              <Table
+                minWidth={560}
+                columns={[
+                  { key: "buyer", label: "From", flex: 1.6 },
+                  { key: "commodity", label: "Order", flex: 1.4 },
+                  { key: "rating", label: "Rating" },
+                  { key: "note", label: "Note", flex: 1.8 },
+                ]}
+                rows={feedback.map((f) => {
+                  const stars = Math.round((f.quality + f.delivery + f.communication) / 3);
+                  return {
+                    buyer: f.authorName,
+                    commodity: f.commodity !== "" ? `${f.qty} ${f.unit} ${f.commodity}` : "—",
+                    rating: <Text size="xs" noTranslate>{"★".repeat(stars) + "☆".repeat(5 - stars)}</Text>,
+                    note: <Muted>{f.note}</Muted>,
+                  };
+                })}
+              />
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -875,7 +1496,7 @@ export function RelationshipsSection() {
               <Users size={16} color={colors.fpo} />
               <CardTitle>Farmer engagement</CardTitle>
             </View>
-            <Badge color={colors.fpo} bg={colors.fpoSoft}>{`${cum.totalMembers} on roll`}</Badge>
+            <Badge color={colors.fpo} bg={colors.fpoSoft}>{`${members.length} on roll`}</Badge>
           </View>
         </CardHeader>
         <CardContent>
@@ -918,7 +1539,7 @@ export function RelationshipsSection() {
               action: m.status !== "Active" ? (
                 <Button size="sm" variant="outline" accent={colors.fpo}
                   icon={<AlertTriangle size={11} color={colors.fpo} />}
-                  onPress={() => toast.success(`Outreach scheduled for ${m.name}.`)}>
+                  onPress={() => intervene(m)}>
                   Intervene
                 </Button>
               ) : <Text size="xs"> </Text>,
@@ -971,7 +1592,14 @@ function AddCommodityForm({ onAdd }: { onAdd: (s: FPOSupply) => void }) {
   );
 }
 
-function AddNeedForm({ onAdd }: { onAdd: (n: InputNeed) => void }) {
+/**
+ * What the input form collects, before it becomes an `input_demand` request.
+ * A form draft rather than a domain row — `qty` here is still the free text the
+ * user typed ("120 kg"), which the caller parses.
+ */
+interface InputNeedDraft { item: string; category: string; qty: string; window: string }
+
+function AddNeedForm({ onAdd }: { onAdd: (n: InputNeedDraft) => void }) {
   const [item, setItem] = useState(""); const [cat, setCat] = useState("Seeds");
   const [qty, setQty] = useState(""); const [win, setWin] = useState("");
   return (
@@ -994,7 +1622,14 @@ function AddNeedForm({ onAdd }: { onAdd: (n: InputNeed) => void }) {
   );
 }
 
-function AddMeetingForm({ onAdd, memberCount }: { onAdd: (m: FpoMeeting) => void; memberCount: number }) {
+function AddMeetingForm({
+  onAdd, onNotify, memberCount, latestMeetingId,
+}: {
+  onAdd: (m: FpoMeeting) => Promise<number | null>;
+  onNotify: (meetingId: number) => Promise<void>;
+  memberCount: number;
+  latestMeetingId: number | null;
+}) {
   const [date, setDate] = useState(""); const [time, setTime] = useState("");
   const [agenda, setAgenda] = useState(""); const [venue, setVenue] = useState("");
   return (
@@ -1004,31 +1639,65 @@ function AddMeetingForm({ onAdd, memberCount }: { onAdd: (m: FpoMeeting) => void
       <Field label="Agenda"><Input value={agenda} onChangeText={setAgenda} placeholder="Agenda" /></Field>
       <Field label="Venue"><Input value={venue} onChangeText={setVenue} placeholder="Venue" /></Field>
       <Button full accent={colors.fpo} icon={<Plus size={16} color="#ffffff" />}
-        onPress={() => {
+        onPress={async () => {
           if (!date || !agenda) return;
-          onAdd({ date, time: time || "10:00", agenda, venue: venue || "FPO office" });
+          const id = await onAdd({ date, time: time || "10:00", agenda, venue: venue || "FPO office" });
+          if (id == null) return;
           setDate(""); setTime(""); setAgenda(""); setVenue("");
           toast.success("Meeting logged.");
         }}>
         Log meeting
       </Button>
+      {/* Writes one invitation row per active member, so the count reported back
+          is the number actually sent rather than a figure read off a column. */}
       <Button full variant="outline" accent={colors.fpo} style={{ marginTop: spacing.sm }}
         icon={<Send size={16} color={colors.fpo} />}
-        onPress={() => toast.success(`Meeting notification sent to ${memberCount} member farmers.`)}>
-        Send notification to all members
+        disabled={latestMeetingId == null}
+        onPress={() => { if (latestMeetingId != null) void onNotify(latestMeetingId); }}>
+        {latestMeetingId == null
+          ? "Log a meeting first"
+          : `Notify ${memberCount} member ${memberCount === 1 ? "farmer" : "farmers"}`}
       </Button>
     </View>
   );
 }
 
-function AddEntry({ onAdd, running }: { onAdd: (e: LedgerEntry) => void; running: number }) {
+/** Sentinel for "the counterparty is not a party in this app". */
+const OTHER = "__other";
+
+function AddEntry({
+  onAdd, running, counterparties,
+}: {
+  onAdd: (e: LedgerEntry) => void;
+  running: number;
+  counterparties: { partyId: number; name: string; kind: string }[];
+}) {
   const [desc, setDesc] = useState(""); const [amt, setAmt] = useState("");
-  const [type, setType] = useState<"Income" | "Expense">("Income"); const [cp, setCp] = useState("");
+  const [type, setType] = useState<"Income" | "Expense">("Income");
+  const [cp, setCp] = useState<string>(OTHER);
+  const [label, setLabel] = useState("");
+
+  const options = [OTHER, ...counterparties.map((c) => String(c.partyId))];
+  const labelOf = (v: string) => {
+    if (v === OTHER) return "Someone else (type a name)";
+    const c = counterparties.find((x) => String(x.partyId) === v);
+    return c == null ? v : `${c.name} (${c.kind})`;
+  };
+
   return (
     <View style={s.form}>
       <Field label="Description"><Input value={desc} onChangeText={setDesc} placeholder="Description" /></Field>
       <Field label="Type"><Select value={type} options={["Income", "Expense"] as const} onChange={setType} /></Field>
-      <Field label="Buyer/Seller ID"><Input value={cp} onChangeText={setCp} placeholder="Buyer/Seller ID" /></Field>
+      {/* A picker of real parties, with a free-text fallback for the entries that
+          genuinely name no party — a pooled procurement, a payout to all members. */}
+      <Field label="Counterparty">
+        <Select value={cp} options={options} onChange={setCp} labelOf={labelOf} />
+      </Field>
+      {cp === OTHER && (
+        <Field label="Counterparty name">
+          <Input value={label} onChangeText={setLabel} placeholder="e.g. Pooled procurement" />
+        </Field>
+      )}
       <Field label="Amount ₹"><Input value={amt} onChangeText={setAmt} placeholder="Amount ₹" keyboardType="numeric" /></Field>
       <Button full accent={colors.fpo}
         onPress={() => {
@@ -1036,8 +1705,12 @@ function AddEntry({ onAdd, running }: { onAdd: (e: LedgerEntry) => void; running
           if (!desc || !amount) return;
           // Running-balance computation preserved from the web app.
           const newBal = type === "Income" ? running + amount : running - amount;
-          onAdd({ date: new Date().toISOString().slice(0, 10), desc, type, amount, balance: newBal, counterpartyId: cp || undefined });
-          setDesc(""); setAmt(""); setCp("");
+          onAdd({
+            date: new Date().toISOString().slice(0, 10), desc, type, amount, balance: newBal,
+            counterpartyPartyId: cp === OTHER ? null : Number(cp),
+            counterpartyLabel: cp === OTHER ? (label || null) : null,
+          });
+          setDesc(""); setAmt(""); setLabel("");
         }}>
         Add entry
       </Button>

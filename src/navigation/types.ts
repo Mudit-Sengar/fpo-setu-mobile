@@ -9,6 +9,7 @@ export type RootStackParamList = {
   Farmer: undefined;       // web "/farmer"
   Fpo: undefined;          // web "/fpo"
   Buyer: undefined;        // web "/buyer"
+  Admin: undefined;        // no web equivalent — admin was an access grant there
 };
 
 export type FarmerStackParamList = {

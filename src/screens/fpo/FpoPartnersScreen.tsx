@@ -1,17 +1,17 @@
 import React, { useState } from "react";
 import { useNavigation } from "@react-navigation/native";
 import {
-  Banknote, ClipboardList, Landmark, Package, ShieldCheck, Truck, Users,
+  Banknote, ClipboardList, Inbox, Landmark, Package, ShieldCheck, Truck, Users,
 } from "lucide-react-native";
 import { colors } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import { EmptyHint, SectionCard, SectionCardRow } from "../../components/common";
 import {
   AccessCreditSection, ComplianceSection, GovtSchemesSection, LocateBuyerSection,
-  LocateSupplierSection, LogisticsSection, PostRequestSection,
+  LocateSupplierSection, LogisticsSection, PostRequestSection, ResponsesSection,
 } from "../../features/fpo-sections";
 
-type Sub = null | "post" | "buyer" | "supplier" | "logistics" | "credit" | "schemes" | "compliance";
+type Sub = null | "post" | "replies" | "buyer" | "supplier" | "logistics" | "credit" | "schemes" | "compliance";
 
 /** Ported from the web app's src/routes/fpo.partners.tsx */
 export function FpoPartnersScreen() {
@@ -25,6 +25,8 @@ export function FpoPartnersScreen() {
       <SectionCardRow>
         <SectionCard title="Post Request" accent={colors.fpo} active={sub === "post"} onPress={() => toggle("post")}
           icon={<ClipboardList size={22} color={iconColor("post")} />} />
+        <SectionCard title="Inbox" accent={colors.fpo} active={sub === "replies"} onPress={() => toggle("replies")}
+          icon={<Inbox size={22} color={iconColor("replies")} />} />
         <SectionCard title="Locate a Buyer" accent={colors.fpo} active={sub === "buyer"} onPress={() => toggle("buyer")}
           icon={<Users size={22} color={iconColor("buyer")} />} />
         <SectionCard title="Locate a Supplier" accent={colors.fpo} active={sub === "supplier"} onPress={() => toggle("supplier")}
@@ -41,6 +43,7 @@ export function FpoPartnersScreen() {
 
       {sub === null && <EmptyHint>Pick a button to open that section.</EmptyHint>}
       {sub === "post" && <PostRequestSection />}
+      {sub === "replies" && <ResponsesSection />}
       {sub === "buyer" && <LocateBuyerSection />}
       {sub === "supplier" && <LocateSupplierSection />}
       {sub === "logistics" && <LogisticsSection />}

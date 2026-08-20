@@ -1,4 +1,5 @@
-import { withDb } from "../connection";
+import { withDb, withWrite } from "../connection";
+import { requireProfile, type SessionContext } from "../authz";
 import type { Buyer, BuyerType, Demand, LookupKind, Review, Supplier, SupplyPost, SupplyPosting } from "../types";
 
 /** Buyers, suppliers, their postings, plus demand/supply/review writes and lookups. */
@@ -43,6 +44,44 @@ export async function buyersByCategory(): Promise<Record<string, Buyer[]>> {
   }, {});
 }
 
+/** The editable half of a buyer's own record. */
+export interface BuyerProfileUpdate {
+  name: string;
+  type: string;
+  commodities: string[];
+  typicalVolumeMT: number;
+  location: string;
+  qualitySpecs: string;
+  procurementWindow: string;
+}
+
+/**
+ * Saves the signed-in buyer's own profile.
+ *
+ * `commodities` is a child table, so the write is a transaction: replacing the
+ * set outside one would leave the buyer with no commodities if the second
+ * statement failed, and a buyer with no commodities matches nothing.
+ */
+export async function updateBuyerProfile(ctx: SessionContext | null, input: BuyerProfileUpdate): Promise<void> {
+  const buyerId = requireProfile(ctx, "buyer");
+  await withWrite("updateBuyerProfile", (db) => db.transaction(async (tx) => {
+    await tx.execute(
+      `UPDATE buyers SET name = ?, type = ?, typical_volume_mt = ?, location = ?,
+                         quality_specs = ?, procurement_window = ?
+         WHERE id = ?;`,
+      [input.name, input.type, input.typicalVolumeMT, input.location,
+        input.qualitySpecs, input.procurementWindow, buyerId],
+    );
+    await tx.execute("DELETE FROM buyer_commodities WHERE buyer_id = ?;", [buyerId]);
+    for (const c of input.commodities) {
+      await tx.execute(
+        "INSERT OR IGNORE INTO buyer_commodities (buyer_id, commodity) VALUES (?, ?);",
+        [buyerId, c],
+      );
+    }
+  }));
+}
+
 /* ---------------------------------------------------------- suppliers ---- */
 
 export async function listSuppliers(): Promise<Supplier[]> {
@@ -69,6 +108,56 @@ export async function listSuppliers(): Promise<Supplier[]> {
       };
     }));
   });
+}
+
+/** A single supplier by id — used to load the signed-in supplier's own profile. */
+export async function getSupplierById(id: string): Promise<Supplier | null> {
+  const suppliers = await listSuppliers();
+  return suppliers.find((s) => s.id === id) ?? null;
+}
+
+/** The editable half of a supplier's own record. */
+export interface SupplierProfileUpdate {
+  name: string;
+  brand: string;
+  categories: string[];
+  products: string;
+  priceRange: string;
+  certifications: string;
+  regions: string;
+  minOrder: string;
+  leadTimeDays: number;
+  seasons: string;
+}
+
+/**
+ * Saves the signed-in supplier's own profile.
+ *
+ * Name and brand are separate fields here. The screen used to render them as one
+ * "Mahabeej Seeds Ltd (Mahabeej)" input, which reads well but cannot be parsed
+ * back into two columns once someone edits it.
+ */
+export async function updateSupplierProfile(
+  ctx: SessionContext | null, input: SupplierProfileUpdate,
+): Promise<void> {
+  const supplierId = requireProfile(ctx, "supplier");
+  await withWrite("updateSupplierProfile", (db) => db.transaction(async (tx) => {
+    await tx.execute(
+      `UPDATE suppliers SET name = ?, brand = ?, products = ?, price_range = ?,
+                            certifications = ?, regions = ?, min_order = ?,
+                            lead_time_days = ?, seasons = ?
+         WHERE id = ?;`,
+      [input.name, input.brand, input.products, input.priceRange, input.certifications,
+        input.regions, input.minOrder, input.leadTimeDays, input.seasons, supplierId],
+    );
+    await tx.execute("DELETE FROM supplier_categories WHERE supplier_id = ?;", [supplierId]);
+    for (const c of input.categories) {
+      await tx.execute(
+        "INSERT OR IGNORE INTO supplier_categories (supplier_id, category) VALUES (?, ?);",
+        [supplierId, c],
+      );
+    }
+  }));
 }
 
 export async function listSupplierPostings(): Promise<SupplyPosting[]> {
@@ -103,7 +192,7 @@ export async function listDemands(): Promise<Demand[]> {
 }
 
 export async function insertDemand(d: Demand): Promise<void> {
-  await withDb("insertDemand", (db) =>
+  await withWrite("insertDemand", (db) =>
     db.execute(
       "INSERT INTO demands (id, commodity, qty_mt, grade, delivery, location) VALUES (?,?,?,?,?,?);",
       [d.id, d.commodity, d.qty_mt, d.grade, d.delivery, d.location],
@@ -128,7 +217,7 @@ export async function listSupplies(): Promise<SupplyPost[]> {
 }
 
 export async function insertSupply(s: SupplyPost): Promise<void> {
-  await withDb("insertSupply", (db) =>
+  await withWrite("insertSupply", (db) =>
     db.execute(
       "INSERT INTO supplies (id, item, category, qty, price_per_unit, region, window) VALUES (?,?,?,?,?,?,?);",
       [s.id, s.item, s.category, s.qty, s.pricePerUnit, s.region, s.window],
@@ -138,7 +227,7 @@ export async function insertSupply(s: SupplyPost): Promise<void> {
 /* ------------------------------------------------------------ reviews ---- */
 
 export async function insertReview(r: Review): Promise<void> {
-  await withDb("insertReview", (db) =>
+  await withWrite("insertReview", (db) =>
     db.execute(
       `INSERT INTO reviews (target_id, target_type, quality, delivery, communication, note)
        VALUES (?,?,?,?,?,?);`,

@@ -34,7 +34,13 @@ export const LANG_LABELS: Record<Lang, string> = {
 
 // Storage keys kept identical to the web app for continuity.
 const K_LANG = "setu.lang";
-const K_FPO = "setu.fpo";
+/**
+ * NOTE: there used to be a `setu.fpo` key holding the active FPO id, defaulting
+ * to "fpo-1". Every FPO screen read it, so a stale or edited value pointed an FPO
+ * login at another organisation's supply, meetings and ledger. It is now derived
+ * from the session instead — see `activeFpoId` below — and the key is no longer
+ * read or written.
+ */
 /**
  * Persisted session. Stores only the user id and which view was open — never the
  * password or a copy of the profile. Everything else is re-read from the database
@@ -47,8 +53,12 @@ interface AppState {
   lang: Lang;
   setLang: (l: Lang) => void;
   t: (k: keyof typeof STRINGS) => string;
+  /**
+   * The FPO whose data the FPO screens read and write. Derived from the session,
+   * never from storage: it is the signed-in FPO's own id, and "" in any other
+   * role (so a stray read returns no rows rather than another org's data).
+   */
   activeFpoId: string;
-  setActiveFpoId: (id: string) => void;
 
   /** The authenticated session, or null when signed out. */
   session: Session | null;
@@ -59,6 +69,11 @@ interface AppState {
    * `buyers.id`). Screens read their profile from this instead of a constant.
    */
   profileId: string | null;
+  /**
+   * `parties.id` for the active profile — what a write records as its author.
+   * Null when signed out.
+   */
+  partyId: number | null;
   signIn: (username: string, password: string, role: Role) => Promise<SignInResult>;
   /** Admin-only: open another role's view without signing in again. */
   switchRole: (role: Role) => Promise<boolean>;
@@ -71,9 +86,12 @@ const Ctx = createContext<AppState | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>("en");
-  const [activeFpoId, setActiveFpoIdState] = useState<string>("fpo-1");
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
+
+  // Not state: there is exactly one correct answer at any moment, and it is the
+  // session's. Holding a separate copy is what allowed it to drift.
+  const activeFpoId = session?.activeRole === "fpo" ? session.profileId : "";
 
   // MIGRATION NOTE: the web app read localStorage synchronously inside useState
   // initialisers. AsyncStorage is async, so hydration moves into an effect and
@@ -90,11 +108,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // Screens degrade to empty lists rather than crashing on a DB failure.
       }
       try {
-        const pairs = await AsyncStorage.multiGet([K_LANG, K_FPO, K_SESSION]);
+        const pairs = await AsyncStorage.multiGet([K_LANG, K_SESSION]);
         if (cancelled) return;
         const map = Object.fromEntries(pairs) as Record<string, string | null>;
         if (map[K_LANG]) setLangState(map[K_LANG] as Lang);
-        if (map[K_FPO]) setActiveFpoIdState(map[K_FPO] as string);
 
         if (map[K_SESSION]) {
           const { userId, activeRole } = JSON.parse(map[K_SESSION]) as
@@ -104,7 +121,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           if (cancelled) return;
           if (restored != null) {
             setSession(restored);
-            if (restored.activeRole === "fpo") setActiveFpoIdState(restored.profileId);
           } else {
             await AsyncStorage.removeItem(K_SESSION).catch(() => {});
           }
@@ -124,17 +140,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     void AsyncStorage.setItem(K_LANG, l).catch(() => {});
   }, []);
 
-  const setActiveFpoId = useCallback((id: string) => {
-    setActiveFpoIdState(id);
-    void AsyncStorage.setItem(K_FPO, id).catch(() => {});
-  }, []);
-
-  /** Applies a new session: state, the FPO the shell reads, and storage. */
+  /** Applies a new session: state and storage. */
   const adoptSession = useCallback((s: Session) => {
     setSession(s);
-    // The FPO screens read `activeFpoId`; keep it pointing at the session's FPO
-    // profile so an FPO login sees its own organisation.
-    if (s.activeRole === "fpo") setActiveFpoIdState(s.profileId);
     void AsyncStorage.setItem(
       K_SESSION, JSON.stringify({ userId: s.userId, activeRole: s.activeRole }),
     ).catch(() => {});
@@ -164,15 +172,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setLang,
     t: (k) => STRINGS[k]?.[lang] ?? String(k),
     activeFpoId,
-    setActiveFpoId,
     session,
     role: session?.activeRole ?? null,
     profileId: session?.profileId ?? null,
+    partyId: session?.partyId ?? null,
     signIn,
     switchRole,
     logout,
     ready,
-  }), [lang, setLang, activeFpoId, setActiveFpoId, session, signIn, switchRole, logout, ready]);
+  }), [lang, setLang, activeFpoId, session, signIn, switchRole, logout, ready]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
