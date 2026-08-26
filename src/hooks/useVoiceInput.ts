@@ -1,44 +1,55 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useIsFocused } from "@react-navigation/native";
-import {
-  start as startRecognition,
-  stop as stopRecognition,
-  requestPermissions,
-  isAvailable,
-  addSpeechResultListener,
-  addSpeechErrorListener,
-  addSpeechEndListener,
-  SpeechErrorCode,
-  type SpeechResult,
-  type SpeechError,
-} from "@dbkable/react-native-speech-to-text";
+import { DeviceEventEmitter, PermissionsAndroid, Platform } from "react-native";
+import NativeVoiceInput from "../native/NativeVoiceInput";
 import { useApp } from "../lib/app-state";
 
 /**
- * Speech-to-text for Krishi Bandhu, on @dbkable/react-native-speech-to-text —
- * a TurboModule-based package, required since this app runs on the New
- * Architecture with no legacy-bridge fallback (newArchEnabled=true, RN 0.86).
+ * Speech-to-text for Krishi Bandhu, on the app's own NativeVoiceInput TurboModule
+ * (see src/native/NativeVoiceInput.ts and
+ * android/app/src/main/java/com/fposetu/mobile/VoiceInputModule.kt) — hand-written
+ * because the previously-used @dbkable/react-native-speech-to-text package's native
+ * module never actually implemented the TurboModule interface it registered as, so it
+ * always threw on import under this app's New Architecture (newArchEnabled=true, RN
+ * 0.86, no legacy-bridge fallback) before the mic could ever be tapped.
  *
- * KNOWN REGRESSION VS. THE PREVIOUS expo-speech-recognition IMPLEMENTATION
- * --------------------------------------------------------------------------
- * The previous hook negotiated a supported locale and, on failure, retried
- * against alternate Android recognition services (see git history: "negotiate
- * a supported speech locale", "stop force-selecting a recognition service") —
- * real fixes for real on-device failures. This package's API is start({
- * language }) / stop() / requestPermissions() / isAvailable() plus result/
- * error/end listeners — it does not expose service enumeration or per-attempt
- * service targeting, so that negotiation/retry logic cannot be ported as-is.
- * This is a deliberate, documented trade-off (try the maintained npm package
- * first); if voice input misbehaves on real devices the way the old
- * force-a-service bug did, the fix is a small custom Android TurboModule
- * wrapping android.speech.SpeechRecognizer directly, which can reintroduce
- * that negotiation using the exact same manifest <queries> already declared
- * for it.
+ * The native module launches Android's speech recognizer as its own foreground
+ * dialog Activity rather than binding the headless SpeechRecognizer service class —
+ * see VoiceInputModule.kt's header comment for why (in short: the headless approach
+ * failed with MICROPHONE_UNAVAILABLE on a real OEM device despite RECORD_AUDIO being
+ * granted, due to that device's power management not treating a bound background
+ * service as foreground enough). One consequence of the fix: there are no live
+ * partial results while speaking — `onSpeechResult` only ever fires once, final.
  */
 
 export type VoiceStatus = "idle" | "listening" | "processing";
 
 const LOCALE: Record<string, string> = { en: "en-IN", hi: "hi-IN", mr: "mr-IN" };
+
+export enum SpeechErrorCode {
+  PERMISSION_DENIED = "PERMISSION_DENIED",
+  NOT_AVAILABLE = "NOT_AVAILABLE",
+  START_FAILED = "START_FAILED",
+  STOP_FAILED = "STOP_FAILED",
+  AUDIO_ERROR = "AUDIO_ERROR",
+  CLIENT_ERROR = "CLIENT_ERROR",
+  NETWORK_ERROR = "NETWORK_ERROR",
+  NETWORK_TIMEOUT = "NETWORK_TIMEOUT",
+  RECOGNIZER_BUSY = "RECOGNIZER_BUSY",
+  SERVER_ERROR = "SERVER_ERROR",
+  UNKNOWN_ERROR = "UNKNOWN_ERROR",
+}
+
+interface SpeechResult {
+  transcript: string;
+  confidence: number;
+  isFinal: boolean;
+}
+
+interface SpeechError {
+  code: SpeechErrorCode | string;
+  message: string;
+}
 
 export interface UseVoiceInput {
   status: VoiceStatus;
@@ -67,7 +78,7 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
   // ---- availability ---------------------------------------------------
   useEffect(() => {
     let cancelled = false;
-    void isAvailable()
+    void NativeVoiceInput.isAvailable()
       .then((v) => { if (!cancelled) setAvailable(v); })
       .catch(() => { if (!cancelled) setAvailable(false); });
     return () => { cancelled = true; };
@@ -75,25 +86,21 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
 
   // ---- native events ----------------------------------------------------
   useEffect(() => {
-    const resultSub = addSpeechResultListener((result: SpeechResult) => {
-      if (result.isFinal) {
-        setPartial("");
-        setStatus("processing");
-        const text = result.transcript.trim();
-        if (text.length > 0) onResultRef.current(text);
-        setTimeout(() => setStatus("idle"), 250);
-      } else {
-        setPartial(result.transcript);
-      }
+    const resultSub = DeviceEventEmitter.addListener("onSpeechResult", (result: SpeechResult) => {
+      setPartial("");
+      setStatus("processing");
+      const text = result.transcript.trim();
+      if (text.length > 0) onResultRef.current(text);
+      setTimeout(() => setStatus("idle"), 250);
     });
 
-    const errorSub = addSpeechErrorListener((e: SpeechError) => {
+    const errorSub = DeviceEventEmitter.addListener("onSpeechError", (e: SpeechError) => {
       setPartial("");
       setStatus("idle");
       setError(describeError(e.code));
     });
 
-    const endSub = addSpeechEndListener(() => {
+    const endSub = DeviceEventEmitter.addListener("onSpeechEnd", () => {
       setPartial("");
       if (statusRef.current === "listening") setStatus("idle");
     });
@@ -106,7 +113,7 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
   }, []);
 
   const stop = useCallback(() => {
-    void stopRecognition().catch(() => { /* not running */ });
+    void NativeVoiceInput.stop().catch(() => { /* not running */ });
     setPartial("");
     setStatus("idle");
   }, []);
@@ -117,7 +124,7 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
   }, [isFocused, stop]);
 
   useEffect(() => () => {
-    void stopRecognition().catch(() => { /* not running */ });
+    void NativeVoiceInput.stop().catch(() => { /* not running */ });
   }, []);
 
   const start = useCallback(async () => {
@@ -126,25 +133,28 @@ export function useVoiceInput(onResult: (transcript: string) => void): UseVoiceI
     if (statusRef.current === "listening") { stop(); return; }
 
     try {
-      const canUse = await isAvailable();
+      const canUse = await NativeVoiceInput.isAvailable();
       setAvailable(canUse);
       if (!canUse) {
         setError("Voice services aren't available on this device — please type.");
         return;
       }
 
-      const granted = await requestPermissions({
-        title: "Microphone Permission",
-        message: "FPO Setu needs microphone access for voice input.",
-        buttonPositive: "Allow",
-      });
+      const granted = Platform.OS !== "android" || (await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        {
+          title: "Microphone Permission",
+          message: "FPO Setu needs microphone access for voice input.",
+          buttonPositive: "Allow",
+        },
+      )) === PermissionsAndroid.RESULTS.GRANTED;
       if (!granted) {
         setError("Microphone permission is needed for voice. You can still type.");
         return;
       }
 
       setStatus("listening");
-      await startRecognition({ language: LOCALE[lang] ?? "en-IN" });
+      await NativeVoiceInput.start(LOCALE[lang] ?? "en-IN");
     } catch {
       setStatus("idle");
       setError("Couldn't start voice input. Please type your request.");
@@ -172,7 +182,6 @@ function describeError(code: SpeechErrorCode | string): string | null {
       return "Voice is still starting up — tap the mic again in a moment.";
     case SpeechErrorCode.START_FAILED:
     case SpeechErrorCode.STOP_FAILED:
-    case SpeechErrorCode.REQUEST_FAILED:
     case SpeechErrorCode.CLIENT_ERROR:
     case SpeechErrorCode.SERVER_ERROR:
     case SpeechErrorCode.UNKNOWN_ERROR:

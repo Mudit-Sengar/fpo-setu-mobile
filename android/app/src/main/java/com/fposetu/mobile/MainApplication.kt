@@ -21,6 +21,7 @@ class MainApplication : Application(), ReactApplication {
           // App-local TurboModules (not autolinked because they live in this app,
           // not in a node_modules package).
           add(TtsPackage())
+          add(VoiceInputPackage())
         }
     )
   }
