@@ -10,6 +10,7 @@ import { fpoRepo, marketRepo, membershipRepo } from "../../db";
 import { describeWriteError } from "../../db/authz";
 import type { MembershipRow } from "../../db/repositories/membershipRepository";
 import { useApp } from "../../lib/app-state";
+import { tr } from "../../lib/i18n";
 import { useDbQuery } from "../../db/useDbQuery";
 import type { FPO, FpoMonthlySummary } from "../../db/types";
 import { colors, radius, spacing } from "../../theme";
@@ -66,6 +67,7 @@ export function MyFpoScreen() {
 }
 
 function MarketInsights() {
+  const { lang } = useApp();
   const { width } = useWindowDimensions();
   const chartW = width - spacing.lg * 2 - spacing.lg * 2;
   const farmer = useSessionFarmer();
@@ -153,7 +155,7 @@ function MarketInsights() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{`Daily APMC prices · ${crop}`}</CardTitle>
+          <CardTitle>{`${tr("Daily APMC prices", lang)} · ${tr(crop, lang)}`}</CardTitle>
           <View style={{ flexDirection: "row", justifyContent: "flex-end", marginTop: spacing.sm }}>
             <Segmented
               options={["1w", "1m"] as const}
@@ -215,6 +217,7 @@ function MarketInsights() {
 }
 
 function MyFpoDetails() {
+  const { lang } = useApp();
   const farmer = useSessionFarmer();
   const fpo = useDbQuery<FPO | null>(
     () => (farmer?.fpoId != null ? fpoRepo.getFpoById(farmer.fpoId) : Promise.resolve(null)),
@@ -244,7 +247,7 @@ function MyFpoDetails() {
           <View style={{ flexDirection: "row", gap: spacing.md }}>
             <Placard label="Sales" value={`₹${inr(sales)}`} foot={`${monthSold} q · ₹${sellPrice}/q`} />
             <Placard label="My Share of Profit" value={`₹${inr(profitShare)}`}
-              foot={`Equity share: ${farmer.sharePct}%`} highlight />
+              foot={`${tr("Equity share:", lang)} ${farmer.sharePct}%`} highlight />
           </View>
           <View style={{ alignItems: "flex-end", marginTop: spacing.md }}>
             <Button variant="outline" size="sm" accent={colors.farmer}
@@ -293,7 +296,7 @@ function MyFpoDetails() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle>{`Membership · ${fpo.name}`}</CardTitle></CardHeader>
+        <CardHeader><CardTitle>{`${tr("Membership", lang)} · ${tr(fpo.name, lang)}`}</CardTitle></CardHeader>
         <CardContent>
           <View style={s.statGrid}>
             <Stat label="Shareholding" value={`${farmer.sharePct}%`} />
@@ -310,6 +313,7 @@ function MyFpoDetails() {
 }
 
 function NearbyFpos() {
+  const { lang } = useApp();
   const farmer = useSessionFarmer();
   const fpos = useDbQuery<FPO[]>(() => fpoRepo.listFpos(), [], []);
   const memberships = useDbQuery<MembershipRow[]>(
@@ -348,8 +352,8 @@ function NearbyFpos() {
 
               <View style={s.metaList}>
                 <Meta icon={<MapPin size={13} color={colors.mutedForeground} />} label={`${fpo.block}, ${fpo.district}`} />
-                <Meta icon={<Users size={13} color={colors.mutedForeground} />} label={`${fpo.members} members`} />
-                <Meta icon={<Sprout size={13} color={colors.mutedForeground} />} label={fpo.commodities.join(", ")} />
+                <Meta icon={<Users size={13} color={colors.mutedForeground} />} label={`${fpo.members} ${tr("members", lang)}`} />
+                <Meta icon={<Sprout size={13} color={colors.mutedForeground} />} label={fpo.commodities.map((c) => tr(c, lang)).join(", ")} />
               </View>
 
               {standing?.status === "pending" && (
@@ -388,7 +392,7 @@ function NearbyFpos() {
 function ApplyForm({
   fpo, farmer, onDone,
 }: { fpo: FPO; farmer: ReturnType<typeof useSessionFarmer>; onDone: () => void }) {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const [mobile, setMobile] = useState("");
   const [village, setVillage] = useState(farmer?.village ?? "");
   const [land, setLand] = useState(farmer?.landAcres != null ? String(farmer.landAcres) : "");
@@ -408,7 +412,7 @@ function ApplyForm({
         landAcres: Number(land) || null,
         crops: crops.split(",").map((c) => c.trim()).filter((c) => c.length > 0),
       });
-      toast.success(`Application sent to ${fpo.name}. They will approve or decline it.`);
+      toast.success(`${tr("Application sent to", lang)} ${fpo.name}. ${tr("They will approve or decline it.", lang)}`);
       onDone();
     } catch (e) {
       toast.error(describeWriteError(e, "Could not send that application."));

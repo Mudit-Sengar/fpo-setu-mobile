@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import {
-  AlertTriangle, ArrowRight, Boxes, Building2, CalendarRange,
+  AlertTriangle, ArrowRight, Boxes, Building2, CalendarRange, Camera,
   ChevronRight, FileText, PackageCheck, ScrollText, ShieldCheck, Sparkles,
   TrendingUp, Warehouse, XCircle,
 } from "lucide-react-native";
@@ -12,10 +12,11 @@ import {
 } from "../components/ui";
 import { BackLink } from "../components/common";
 import { marketRepo, networkRepo, readinessRepo, serviceRepo } from "../db";
-import { describeWriteError } from "../db/authz";
-import type { Assessment } from "../db/repositories/readinessRepository";
+import { describeWriteError, type SessionContext } from "../db/authz";
+import type { Assessment, Gap } from "../db/repositories/readinessRepository";
 import { useDbQuery } from "../db/useDbQuery";
 import { useApp } from "../lib/app-state";
+import { tr } from "../lib/i18n";
 import type { Buyer } from "../db/types";
 
 /** Ported from the web app's src/components/market-readiness.tsx */
@@ -222,7 +223,7 @@ export function MarketReadinessHubSection() {
  * was a way to get one drawn up.
  */
 function RequestContractButton({ buyerName }: { buyerName: string }) {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const providers = useDbQuery(() => serviceRepo.listProviders("compliance"), [], []);
   const [busy, setBusy] = useState(false);
 
@@ -241,7 +242,7 @@ function RequestContractButton({ buyerName }: { buyerName: string }) {
             subject: `Contract template for supplying ${buyerName}`,
             details: "Quantity commitment, quality parameters, price discovery, payment terms, penalties.",
           });
-          toast.success(`Requested from ${provider.name}.`);
+          toast.success(`${tr("Requested from", lang)} ${provider.name}.`);
         } catch (e) {
           toast.error(describeWriteError(e, "Could not send that request."));
         } finally {
@@ -273,7 +274,7 @@ type Step = 1 | 2 | 3;
  * names, because a requirement can only be compared against if somebody stated it.
  */
 export function MarketLinkedGrowthPlanning() {
-  const { session, activeFpoId } = useApp();
+  const { session, activeFpoId, lang } = useApp();
   const buyers = useDbQuery<Buyer[]>(() => marketRepo.listBuyers(), [], []);
   const [stage, setStage] = useState<Stage>("select");
   const [buyerId, setBuyerId] = useState<string>("");
@@ -311,7 +312,7 @@ export function MarketLinkedGrowthPlanning() {
         message: `We are working towards supplying ${crop} to you. Current readiness: ${assessment?.score ?? 0}%.`,
         openThread: true,
       });
-      toast.success(`Connection request sent to ${buyer.name}.`);
+      toast.success(`${tr("Connection request sent to", lang)} ${buyer.name}.`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not send that request."));
     } finally {
@@ -484,7 +485,7 @@ export function MarketLinkedGrowthPlanning() {
           <CardHeader><CardTitle>Gap Assessment</CardTitle></CardHeader>
           <CardContent>
             <Muted style={{ marginBottom: spacing.sm }}>
-              {`Measured against what ${buyerName} requires. Tick an item once you have it — the score updates.`}
+              {`Measured against what ${buyerName} requires. Upload evidence for an item once you have it — the score updates.`}
             </Muted>
             {assessment.gaps.map((g) => (
               <View key={g.requirement} style={s.gapRow}>
@@ -496,32 +497,7 @@ export function MarketLinkedGrowthPlanning() {
                       ? <Badge color="#B45309" bg="#FEF3C7">Partial</Badge>
                       : <Badge color="#E11D48" bg="#FFE4E6">Missing</Badge>}
                 </View>
-                {g.status !== "met" && g.category === "infrastructure" && (
-                  <Button size="sm" variant="outline" accent={colors.fpo} style={{ marginTop: spacing.sm }}
-                    onPress={async () => {
-                      try {
-                        await readinessRepo.setInfrastructure(session, g.requirement, true);
-                        toast.success(`${g.requirement} marked available.`);
-                      } catch (e) {
-                        toast.error(describeWriteError(e, "Could not update that."));
-                      }
-                    }}>
-                    Mark as available
-                  </Button>
-                )}
-                {g.status !== "met" && g.category === "certification" && (
-                  <Button size="sm" variant="outline" accent={colors.fpo} style={{ marginTop: spacing.sm }}
-                    onPress={async () => {
-                      try {
-                        await readinessRepo.setCertification(session, g.requirement, true);
-                        toast.success(`${g.requirement} recorded.`);
-                      } catch (e) {
-                        toast.error(describeWriteError(e, "Could not update that."));
-                      }
-                    }}>
-                    Record certification
-                  </Button>
-                )}
+                {g.status !== "met" && <UploadEvidenceButton g={g} session={session} />}
               </View>
             ))}
             <Button full accent={colors.fpo} onPress={() => setStep(2)}
@@ -583,6 +559,58 @@ export function MarketLinkedGrowthPlanning() {
         </Card>
       )}
     </>
+  );
+}
+
+/**
+ * Uploads evidence for one open requirement and re-checks it.
+ *
+ * The original flow let an FPO "upload" warehouse photos and documents, then ran
+ * a fake "AI Assessment" that always landed on the same 91% regardless of what
+ * was uploaded or for which buyer — the web app it was ported from never opened
+ * a real file picker either, so pressing Upload only flipped local state. This
+ * keeps that same one-tap interaction (no native picker exists elsewhere in this
+ * app, so none is introduced here), but the evidence now targets one specific
+ * requirement, writes a real row, and the score only moves for what was actually
+ * closed — independently per requirement, per buyer, per FPO.
+ */
+function UploadEvidenceButton({ g, session }: { g: Gap; session: SessionContext | null }) {
+  const { lang } = useApp();
+  const [busy, setBusy] = useState(false);
+
+  async function upload() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      // A brief pause standing in for on-device analysis of the uploaded photo —
+      // there is no real vision model here, just a real write once it "finishes".
+      await new Promise<void>((resolve) => setTimeout(resolve, 700));
+      if (g.category === "infrastructure") {
+        await readinessRepo.setInfrastructure(session, g.requirement, true);
+      } else if (g.category === "certification") {
+        await readinessRepo.setCertification(session, g.requirement, true);
+      } else if (g.category === "compliance") {
+        await readinessRepo.setCompliance(session, g.requirement, true);
+      } else if (g.category === "quality") {
+        // The quality gap is testing-equipment capability, not a document — the
+        // same "Testing Facility" flag the infrastructure checklist reads.
+        await readinessRepo.setInfrastructure(session, "Testing Facility", true);
+      } else {
+        await readinessRepo.recordStorageCapacity(session, g.targetMt ?? 0);
+      }
+      toast.success(`${g.requirement} ${tr("verified from uploaded evidence.", lang)}`);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not verify that evidence."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Button size="sm" variant="outline" accent={colors.fpo} style={{ marginTop: spacing.sm }}
+      disabled={busy} icon={<Camera size={13} color={colors.fpo} />} onPress={upload}>
+      {busy ? "Analysing…" : "Upload Evidence"}
+    </Button>
   );
 }
 

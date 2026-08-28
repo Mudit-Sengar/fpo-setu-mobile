@@ -3,6 +3,8 @@ import React, { type ReactNode } from "react";
 import { Image, Pressable, StyleSheet, View } from "react-native";
 import { Play } from "lucide-react-native";
 import { imgSource, type Thumb } from "../lib/mockData";
+import { useApp } from "../lib/app-state";
+import { tr } from "../lib/i18n";
 import { colors, radius, spacing } from "../theme";
 import { Muted, Text } from "./ui";
 
@@ -54,6 +56,7 @@ export function Tile({
 export function VideoCard({
   title, duration, thumb, index, onPress, accent = colors.farmer,
 }: { title: string; duration: string; thumb: Thumb; index?: number; onPress: () => void; accent?: string }) {
+  const { lang } = useApp();
   return (
     <Pressable onPress={onPress} style={s.videoCard}>
       <View style={s.videoThumbWrap}>
@@ -63,7 +66,7 @@ export function VideoCard({
         </View>
         {index != null && (
           <View style={[s.stepBadge, { backgroundColor: accent }]}>
-            <Text size="xxs" weight="700" color="#ffffff">{`Step ${index}`}</Text>
+            <Text size="xxs" weight="700" color="#ffffff">{`${tr("Step", lang)} ${index}`}</Text>
           </View>
         )}
         <View style={s.durBadge}>
@@ -81,6 +84,7 @@ export function VideoCard({
 export function CourseCard({
   name, by, progress, thumb, accent,
 }: { name: string; by?: string; progress: number; thumb: Thumb; accent: string }) {
+  const { lang } = useApp();
   return (
     <View style={s.videoCard}>
       <Image source={imgSource(thumb)} style={s.videoThumb} resizeMode="cover" />
@@ -90,7 +94,7 @@ export function CourseCard({
         <View style={s.progressTrack}>
           <View style={{ width: `${progress}%`, height: "100%", backgroundColor: accent, borderRadius: 4 }} />
         </View>
-        <Muted>{`${progress}% complete`}</Muted>
+        <Muted>{`${progress}${tr("% complete", lang)}`}</Muted>
       </View>
     </View>
   );
@@ -163,20 +167,24 @@ export function SectionCard({
     >
       {icon}
       {/*
-        numberOfLines={1} + adjustsFontSizeToFit: at some screen widths a long
-        title (e.g. "Locate a Supplier") wraps to 2 lines while its row
-        siblings stay on 1 — Fabric's flexWrap container then miscalculates
-        that wrapped line's height, so the icon+text block renders shifted
-        within its own card AND every row below (including a lone full-width
-        card and any EmptyHint after it) can end up overlapping. Forcing a
-        single line and shrinking the font slightly only when a title
-        wouldn't otherwise fit removes the wrap entirely, so it can't trigger
+        numberOfLines={1}: a wrapped 2-line title makes Fabric's flexWrap
+        container miscalculate that line's height, shifting the icon+text
+        block within its own card AND every row below (including a lone
+        full-width card and any EmptyHint after it) can end up overlapping.
+        Forcing a single line removes the wrap entirely, so it can't trigger
         that container miscalculation for any SectionCard, on any screen.
-        Full title text still always renders — nothing is truncated.
+
+        adjustsFontSizeToFit + minimumFontScale used to handle overlong
+        titles by shrinking them instead of truncating — but combined with
+        this Text wrapper's explicit lineHeight, translated multi-word titles
+        (Hindi/Marathi run longer than English) silently dropped their second
+        word instead of shrinking or ellipsizing. Plain numberOfLines={1}
+        falls back to RN's default tail-ellipsis, which reliably shows a
+        truncated-but-legible label instead.
       */}
       <Text
         size="xs" weight="700" center
-        numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}
+        numberOfLines={1}
         color={active ? "#ffffff" : colors.foreground}
       >
         {title}

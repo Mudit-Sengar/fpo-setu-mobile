@@ -85,52 +85,68 @@ export async function getBuyerRequirements(buyerId: string): Promise<BuyerRequir
 
 export type RequirementsUpdate = Omit<BuyerRequirements, "buyerId">;
 
+/** The slice of the driver this needs — satisfied by both `DB` and the
+ * `Transaction` object passed to `db.transaction`. */
+type Bindable = string | number | boolean | null;
+interface DbLike {
+  execute: (sql: string, params?: Bindable[]) => Promise<{ rows?: Record<string, unknown>[] }>;
+}
+
 /**
- * Saves the Buyer Readiness form.
+ * Replaces one buyer's requirements, inside the caller's transaction.
  *
  * Every one of these fields used to live in `useState` inside a throwaway
  * sub-component that the parent never read, so the form's only effect was to
  * navigate. The child sets are replaced wholesale inside one transaction —
  * a buyer left half-way through a requirement change would match on a mixture of
  * old and new criteria.
+ *
+ * Takes `buyerId` directly rather than deriving it from a session, so both the
+ * buyer's own save (authorised against their own profile) and an
+ * administrator's edit (authorised against the admin role, for a buyer with no
+ * login of its own yet) share this one write.
  */
+export async function writeBuyerRequirementsTx(
+  tx: DbLike, buyerId: string, input: RequirementsUpdate,
+): Promise<void> {
+  await tx.execute(
+    `INSERT INTO buyer_requirements
+       (buyer_id, quantity, unit, moisture_max, foreign_matter_max, grading_standard,
+        packaging_standard, traceability_required, traceability_note, residue_limits,
+        storage_capacity_required_mt, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
+     ON CONFLICT (buyer_id) DO UPDATE SET
+       quantity = excluded.quantity, unit = excluded.unit,
+       moisture_max = excluded.moisture_max,
+       foreign_matter_max = excluded.foreign_matter_max,
+       grading_standard = excluded.grading_standard,
+       packaging_standard = excluded.packaging_standard,
+       traceability_required = excluded.traceability_required,
+       traceability_note = excluded.traceability_note,
+       residue_limits = excluded.residue_limits,
+       storage_capacity_required_mt = excluded.storage_capacity_required_mt,
+       updated_at = datetime('now');`,
+    [buyerId, input.quantity, input.unit, input.moistureMax, input.foreignMatterMax,
+      input.gradingStandard, input.packagingStandard, input.traceabilityRequired ? 1 : 0,
+      input.traceabilityNote, input.residueLimits, input.storageCapacityRequiredMt]);
+
+  for (const c of CHILD_TABLES) {
+    await tx.execute(`DELETE FROM ${c.table} WHERE buyer_id = ?;`, [buyerId]);
+    for (const value of input[c.key] as string[]) {
+      if (value === "") continue;
+      await tx.execute(
+        `INSERT OR IGNORE INTO ${c.table} (buyer_id, ${c.column}) VALUES (?, ?);`,
+        [buyerId, value]);
+    }
+  }
+}
+
+/** Saves the Buyer Readiness form for the signed-in buyer. */
 export async function saveBuyerRequirements(
   ctx: SessionContext | null, input: RequirementsUpdate,
 ): Promise<void> {
   const buyerId = requireProfile(ctx, "buyer");
-
-  await withWrite("saveBuyerRequirements", (db) => db.transaction(async (tx) => {
-    await tx.execute(
-      `INSERT INTO buyer_requirements
-         (buyer_id, quantity, unit, moisture_max, foreign_matter_max, grading_standard,
-          packaging_standard, traceability_required, traceability_note, residue_limits,
-          storage_capacity_required_mt, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
-       ON CONFLICT (buyer_id) DO UPDATE SET
-         quantity = excluded.quantity, unit = excluded.unit,
-         moisture_max = excluded.moisture_max,
-         foreign_matter_max = excluded.foreign_matter_max,
-         grading_standard = excluded.grading_standard,
-         packaging_standard = excluded.packaging_standard,
-         traceability_required = excluded.traceability_required,
-         traceability_note = excluded.traceability_note,
-         residue_limits = excluded.residue_limits,
-         storage_capacity_required_mt = excluded.storage_capacity_required_mt,
-         updated_at = datetime('now');`,
-      [buyerId, input.quantity, input.unit, input.moistureMax, input.foreignMatterMax,
-        input.gradingStandard, input.packagingStandard, input.traceabilityRequired ? 1 : 0,
-        input.traceabilityNote, input.residueLimits, input.storageCapacityRequiredMt]);
-
-    for (const c of CHILD_TABLES) {
-      await tx.execute(`DELETE FROM ${c.table} WHERE buyer_id = ?;`, [buyerId]);
-      for (const value of input[c.key] as string[]) {
-        if (value === "") continue;
-        await tx.execute(
-          `INSERT OR IGNORE INTO ${c.table} (buyer_id, ${c.column}) VALUES (?, ?);`,
-          [buyerId, value]);
-      }
-    }
-  }));
+  await withWrite("saveBuyerRequirements", (db) => db.transaction((tx) => writeBuyerRequirementsTx(tx, buyerId, input)));
 }
 
 /** Kilometres between every pair of districts, for the matching screens. */
@@ -160,6 +176,8 @@ export interface Gap {
   category: "infrastructure" | "certification" | "compliance" | "quality" | "capacity";
   status: "met" | "partial" | "missing";
   estCost: number;
+  /** For category "capacity": the MT figure evidence must meet or exceed to close it. */
+  targetMt?: number;
 }
 
 export interface Assessment {
@@ -265,6 +283,7 @@ export async function assess(
         status: met ? "met" : warehouseMt > 0 ? "partial" : "missing",
         // Partial credit costs proportionally less than starting from nothing.
         estCost: met ? 0 : Math.round(shortfall * 1200),
+        targetMt: requirements.storageCapacityRequiredMt,
       });
     }
 
@@ -348,4 +367,30 @@ export async function setCertification(
     : db.execute(
       "DELETE FROM fpo_certifications WHERE fpo_id = ? AND certification = ?;",
       [fpoId, certification])));
+}
+
+/** Marks one compliance item held or not for the signed-in FPO. */
+export async function setCompliance(
+  ctx: SessionContext | null, item: string, held: boolean,
+): Promise<void> {
+  const fpoId = requireProfile(ctx, "fpo");
+  await withWrite("setCompliance", (db) => db.execute(
+    `INSERT INTO fpo_compliance (fpo_id, item, held) VALUES (?,?,?)
+     ON CONFLICT (fpo_id, item) DO UPDATE SET held = excluded.held;`,
+    [fpoId, item, held ? 1 : 0]));
+}
+
+/**
+ * Records enough warehouse capacity to close a storage gap for the signed-in FPO.
+ *
+ * Only ever raises the figure — evidence of new capacity should not shrink what
+ * was already on record.
+ */
+export async function recordStorageCapacity(
+  ctx: SessionContext | null, atLeastMt: number,
+): Promise<void> {
+  const fpoId = requireProfile(ctx, "fpo");
+  await withWrite("recordStorageCapacity", (db) => db.execute(
+    "UPDATE fpos SET warehouse_mt = MAX(warehouse_mt, ?) WHERE id = ?;",
+    [atLeastMt, fpoId]));
 }

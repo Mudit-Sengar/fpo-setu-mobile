@@ -6,6 +6,7 @@ import type { OrderRow } from "../../db/repositories/orderRepository";
 import type { ReviewRow } from "../../db/repositories/reviewRepository";
 import { useDbQuery } from "../../db/useDbQuery";
 import { useApp } from "../../lib/app-state";
+import { tr } from "../../lib/i18n";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import {
@@ -25,7 +26,7 @@ import { OrdersPanel } from "../../features/orders";
  * rather than from a picker.
  */
 export function BuyerReviewsScreen() {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const reviewable = useDbQuery<OrderRow[]>(
     () => orderRepo.listReviewableOrders(session), [session?.partyId], []);
   const mine = useDbQuery<ReviewRow[]>(
@@ -62,7 +63,7 @@ export function BuyerReviewsScreen() {
         note: note.trim() === "" ? null : note.trim(),
       });
       setNote("");
-      toast.success(`Review of ${selected.counterpartyName} submitted.`);
+      toast.success(`${tr("Review of", lang)} ${selected.counterpartyName} ${tr("submitted.", lang)}`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not submit that review."));
     } finally {

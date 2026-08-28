@@ -3,11 +3,19 @@ import { Modal, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MessageCircle, Mic, MicOff, Send, Volume2, X } from "lucide-react-native";
 import { useApp, type Role } from "../lib/app-state";
+import { tr } from "../lib/i18n";
 import { useSpeech } from "../hooks/useSpeech";
 import { accentColors, colors, radius, spacing, type Accent } from "../theme";
 import { Input, Text } from "./ui";
 
-interface Msg { role: "user" | "bot"; text: string }
+/**
+ * `text` is a list of segments rather than one pre-joined string. Each static
+ * sentence/fragment is its own array element so <Text> (which translates every
+ * array-child element independently, see components/ui/Text.tsx) can translate
+ * each one; dynamic values (role names, screen names) sit in the array untouched
+ * and simply fail to match any dictionary key, which is a safe no-op.
+ */
+interface Msg { role: "user" | "bot"; text: string[] }
 
 /**
  * FAB geometry. Exported because the FAB floats above RoleShell's ScrollView, so
@@ -33,7 +41,7 @@ export function AssistantWidget({
    *  FPO red on every role — visibly wrong in the teal Buyer view. */
   accent?: Accent;
 }) {
-  const { role } = useApp();
+  const { role, lang } = useApp();
   const { speak, startListening, listening } = useSpeech();
   const insets = useSafeAreaInsets();
   const accentColor = accent ? accentColors[accent].base : colors.primary;
@@ -42,7 +50,13 @@ export function AssistantWidget({
   const scrollRef = useRef<ScrollView | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>([{
     role: "bot",
-    text: `Namaste! I'm the FPO Setu Assistant. Ask me anything about the app${role ? ` — I'll tailor tips for the ${role.toUpperCase()} view.` : "."}`,
+    text: role
+      ? [
+          "Namaste! I'm the FPO Setu Assistant. Ask me anything about the app — I'll tailor tips for the ",
+          role.toUpperCase(),
+          " view.",
+        ]
+      : ["Namaste! I'm the FPO Setu Assistant. Ask me anything about the app."],
   }]);
 
   useEffect(() => { scrollRef.current?.scrollToEnd({ animated: true }); }, [msgs, open]);
@@ -104,21 +118,27 @@ export function AssistantWidget({
     }
 
     if (tips.length === 0) {
-      tips.push(`I'm a rule-based prototype assistant for the ${r.toUpperCase()} view. Try asking about: ${
+      tips.push("I'm a rule-based prototype assistant for the ");
+      tips.push(r.toUpperCase());
+      tips.push(" view. Try asking about: ");
+      tips.push(
         r === "farmer" ? "discover FPOs, benefits, courses, prices"
         : r === "fpo" ? "tiering, bankable proposal, schemes, members, buyer match"
-        : "posting demand, FPO clusters, procurement window"
-      }.`);
-      tips.push(`You're currently on ${screenName}.`);
+        : "posting demand, FPO clusters, procurement window",
+      );
+      tips.push(".");
+      tips.push("You're currently on ");
+      tips.push(screenName);
+      tips.push(".");
     }
-    return tips.join(" ");
+    return tips;
   }
 
   function send(text?: string) {
     const q = (text ?? input).trim();
     if (!q) return;
     const ans = reply(q);
-    setMsgs((m) => [...m, { role: "user", text: q }, { role: "bot", text: ans }]);
+    setMsgs((m) => [...m, { role: "user", text: [q] }, { role: "bot", text: ans }]);
     setInput("");
   }
 
@@ -127,7 +147,7 @@ export function AssistantWidget({
       <Pressable
         onPress={() => setOpen(true)}
         style={[s.fab, { bottom: insets.bottom + FAB_BOTTOM_OFFSET, backgroundColor: accentColor }]}
-        accessibilityLabel="Open FPO Setu Assistant"
+        accessibilityLabel={tr("Open FPO Setu Assistant", lang)}
       >
         <MessageCircle size={24} color="#ffffff" />
       </Pressable>
@@ -139,10 +159,10 @@ export function AssistantWidget({
               <View style={{ flex: 1 }}>
                 <Text size="sm" weight="700" color="#ffffff">FPO Setu Assistant</Text>
                 <Text size="xxs" color="rgba(255,255,255,0.9)">
-                  {`Ask me anything about the app${role ? ` · ${role.toUpperCase()}` : ""}`}
+                  {role ? ["Ask me anything about the app", " · ", role.toUpperCase()] : "Ask me anything about the app"}
                 </Text>
               </View>
-              <Pressable onPress={() => setOpen(false)} hitSlop={10} accessibilityLabel="Close">
+              <Pressable onPress={() => setOpen(false)} hitSlop={10} accessibilityLabel={tr("Close", lang)}>
                 <X size={18} color="#ffffff" />
               </Pressable>
             </View>
@@ -154,11 +174,19 @@ export function AssistantWidget({
                     s.bubble,
                     m.role === "user" ? { backgroundColor: accentColor } : s.bubbleBot,
                   ]}>
-                    <Text size="sm" color={m.role === "user" ? "#ffffff" : colors.foreground} noTranslate>
+                    <Text
+                      size="sm"
+                      color={m.role === "user" ? "#ffffff" : colors.foreground}
+                      noTranslate={m.role === "user"}
+                    >
                       {m.text}
                     </Text>
                     {m.role === "bot" && (
-                      <Pressable onPress={() => speak(m.text)} style={s.listen} hitSlop={6}>
+                      <Pressable
+                        onPress={() => speak(m.text.map((seg) => tr(seg, lang)).join(""))}
+                        style={s.listen}
+                        hitSlop={6}
+                      >
                         <Volume2 size={12} color={colors.mutedForeground} />
                         <Text size="xxs" color={colors.mutedForeground}>Listen</Text>
                       </Pressable>
@@ -172,7 +200,7 @@ export function AssistantWidget({
               <Pressable
                 onPress={startListening}
                 style={[s.iconBtn, listening && { backgroundColor: accentColor, borderColor: accentColor }]}
-                accessibilityLabel="Voice input"
+                accessibilityLabel={tr("Voice input", lang)}
               >
                 {listening
                   ? <MicOff size={16} color="#ffffff" />
@@ -184,7 +212,7 @@ export function AssistantWidget({
               <Pressable
                 onPress={() => send()}
                 style={[s.iconBtn, { backgroundColor: accentColor, borderColor: accentColor }]}
-                accessibilityLabel="Send"
+                accessibilityLabel={tr("Send", lang)}
               >
                 <Send size={16} color="#ffffff" />
               </Pressable>

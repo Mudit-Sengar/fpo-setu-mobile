@@ -5,6 +5,8 @@ import type { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
 import {
   Building2, GraduationCap, Landmark, Mic, MicOff, Send, Users, X,
 } from "lucide-react-native";
+import { useApp } from "../../lib/app-state";
+import { tr } from "../../lib/i18n";
 import { useSessionFarmer } from "../../lib/useSessionProfile";
 import {
   INTENT_EXAMPLES, resolveFarmerIntent, type FarmerDestination,
@@ -27,6 +29,7 @@ import type { FarmerTabParamList } from "../../navigation/types";
  */
 export function FarmerHomeScreen() {
   const nav = useNavigation<BottomTabNavigationProp<FarmerTabParamList>>();
+  const { lang } = useApp();
   const farmer = useSessionFarmer();
   const unread = useUnreadCount();
   const [q, setQ] = useState("");
@@ -58,10 +61,12 @@ export function FarmerHomeScreen() {
     setQ("");
 
     if (!intent) {
-      toast.message(`I didn't understand that. Try: "${INTENT_EXAMPLES[0]}" or "${INTENT_EXAMPLES[1]}".`);
+      toast.message(
+        `${tr("I didn't understand that. Try:", lang)} "${tr(INTENT_EXAMPLES[0], lang)}" ${tr("or", lang)} "${tr(INTENT_EXAMPLES[1], lang)}".`,
+      );
       return;
     }
-    toast.success(`Opening ${intent.label}`);
+    toast.success(`${tr("Opening", lang)} ${tr(intent.label, lang)}`);
     goTo(intent.destination);
   }, [goTo]);
 
@@ -134,7 +139,7 @@ export function FarmerHomeScreen() {
         {voice.error != null && voice.error.length > 0 && (
           <View style={s.errorBox}>
             <Text size="xs" color={colors.destructive} style={{ flex: 1 }}>{voice.error}</Text>
-            <Pressable onPress={voice.clearError} hitSlop={8} accessibilityLabel="Dismiss">
+            <Pressable onPress={voice.clearError} hitSlop={8} accessibilityLabel={tr("Dismiss", lang)}>
               <X size={14} color={colors.destructive} />
             </Pressable>
           </View>
@@ -145,7 +150,7 @@ export function FarmerHomeScreen() {
             <Input
               value={q}
               onChangeText={setQ}
-              placeholder="मला मदत करा... / e.g. onion price today"
+              placeholder="Type your question... / e.g. onion price today"
               editable={!listening}
               multiline={false}
               numberOfLines={1}
@@ -157,7 +162,7 @@ export function FarmerHomeScreen() {
             onPress={listening ? voice.stop : voice.start}
             disabled={processing}
             accessibilityRole="button"
-            accessibilityLabel={listening ? "Stop listening" : "Speak your request"}
+            accessibilityLabel={tr(listening ? "Stop listening" : "Speak your request", lang)}
             accessibilityState={{ busy: listening || processing }}
             style={[
               s.iconBtn,
@@ -175,7 +180,7 @@ export function FarmerHomeScreen() {
           <Pressable
             onPress={() => handleCommand(q)}
             accessibilityRole="button"
-            accessibilityLabel="Send"
+            accessibilityLabel={tr("Send", lang)}
             style={[s.iconBtn, { backgroundColor: colors.farmer, borderColor: colors.farmer }]}
           >
             <Send size={18} color="#ffffff" />
@@ -183,7 +188,7 @@ export function FarmerHomeScreen() {
         </View>
 
         <Muted style={{ marginTop: 2 }}>
-          {`Try: "${INTENT_EXAMPLES[0]}", "${INTENT_EXAMPLES[1]}", "${INTENT_EXAMPLES[2]}"`}
+          {["Try: ", `"${tr(INTENT_EXAMPLES[0], lang)}", "${tr(INTENT_EXAMPLES[1], lang)}", "${tr(INTENT_EXAMPLES[2], lang)}"`]}
         </Muted>
       </View>
     </RoleShell>

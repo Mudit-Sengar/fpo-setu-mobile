@@ -1,3 +1,5 @@
+import { tr, type LangCode } from "./i18n";
+
 /**
  * How well two sides of a trade fit.
  *
@@ -125,18 +127,20 @@ export function matchScore(input: MatchInput): MatchBreakdown {
 }
 
 /** Why a match scored what it did, for the line under the badge. */
-export function explainMatch(b: MatchBreakdown): string {
+export function explainMatch(b: MatchBreakdown, lang: LangCode): string {
   const parts: string[] = [];
-  parts.push(b.quantity >= 1 ? "covers the full quantity" : `covers ${Math.round(b.quantity * 100)}% of the quantity`);
-  if (b.grade >= 1) parts.push("grade met");
-  else if (b.grade > 0.5) parts.push("grade unstated");
-  else if (b.grade > 0) parts.push("one grade below");
-  else parts.push("grade below requirement");
-  if (b.locality >= 0.95) parts.push("same district");
-  else if (b.locality >= 0.6) parts.push("nearby");
-  else if (b.locality > 0.3) parts.push("some distance away");
-  else parts.push("far away");
-  if (b.reputation > 0.6) parts.push("well rated");
-  else if (b.reputation < 0.6) parts.push("rated below average");
+  parts.push(b.quantity >= 1
+    ? tr("covers the full quantity", lang)
+    : `${tr("covers", lang)} ${Math.round(b.quantity * 100)}% ${tr("of the quantity", lang)}`);
+  if (b.grade >= 1) parts.push(tr("grade met", lang));
+  else if (b.grade > 0.5) parts.push(tr("grade unstated", lang));
+  else if (b.grade > 0) parts.push(tr("one grade below", lang));
+  else parts.push(tr("grade below requirement", lang));
+  if (b.locality >= 0.95) parts.push(tr("same district", lang));
+  else if (b.locality >= 0.6) parts.push(tr("nearby", lang));
+  else if (b.locality > 0.3) parts.push(tr("some distance away", lang));
+  else parts.push(tr("far away", lang));
+  if (b.reputation > 0.6) parts.push(tr("well rated", lang));
+  else if (b.reputation < 0.6) parts.push(tr("rated below average", lang));
   return parts.join(" · ");
 }

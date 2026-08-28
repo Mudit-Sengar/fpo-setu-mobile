@@ -1,13 +1,15 @@
 import React, { useState } from "react";
 import { StyleSheet, View } from "react-native";
-import { Activity, Banknote, ShieldAlert, Users, Building2 } from "lucide-react-native";
-import { adminRepo, auditRepo } from "../../db";
+import { Activity, Banknote, ShieldAlert, Users, Building2, ShoppingCart } from "lucide-react-native";
+import { adminRepo, auditRepo, marketRepo } from "../../db";
 import { describeWriteError } from "../../db/authz";
 import type { AdminPartyRow, AdminUserRow } from "../../db/repositories/adminRepository";
 import type { AuditEvent } from "../../db/repositories/auditRepository";
 import type { RoleCode } from "../../db/repositories/authRepository";
+import type { Buyer } from "../../db/types";
 import { useDbQuery } from "../../db/useDbQuery";
 import { useApp } from "../../lib/app-state";
+import { tr } from "../../lib/i18n";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import {
@@ -15,6 +17,7 @@ import {
   Input, Muted, Select, Table, Text, Toggle, toast,
 } from "../../components/ui";
 import { EmptyHint, SectionCard, SectionCardRow } from "../../components/common";
+import { BuyerReadinessForm } from "../../features/buyer-requirements-form";
 
 /**
  * The administrator's view.
@@ -26,7 +29,7 @@ import { EmptyHint, SectionCard, SectionCardRow } from "../../components/common"
  * nowhere to live and no record that it happened.
  */
 
-type Sub = null | "users" | "parties" | "services" | "moderation" | "activity";
+type Sub = null | "users" | "parties" | "buyers" | "services" | "moderation" | "activity";
 
 const ALL_ROLES: RoleCode[] = ["farmer", "fpo", "buyer", "supplier", "admin"];
 
@@ -49,6 +52,8 @@ export function AdminScreen() {
           onPress={() => toggle("users")} icon={<Users size={22} color={iconColor("users")} />} />
         <SectionCard title="Parties" accent={colors.primary} active={sub === "parties"}
           onPress={() => toggle("parties")} icon={<Building2 size={22} color={iconColor("parties")} />} />
+        <SectionCard title="Buyers" accent={colors.primary} active={sub === "buyers"}
+          onPress={() => toggle("buyers")} icon={<ShoppingCart size={22} color={iconColor("buyers")} />} />
         <SectionCard title="Service Desk" accent={colors.primary} active={sub === "services"}
           onPress={() => toggle("services")} icon={<Banknote size={22} color={iconColor("services")} />} />
         <SectionCard title="Moderation" accent={colors.primary} active={sub === "moderation"}
@@ -60,6 +65,7 @@ export function AdminScreen() {
       {sub === null && <EmptyHint>Pick a section to open it.</EmptyHint>}
       {sub === "users" && <UsersSection />}
       {sub === "parties" && <PartiesSection />}
+      {sub === "buyers" && <BuyersSection />}
       {sub === "services" && <ServiceDeskSection />}
       {sub === "moderation" && <ModerationSection />}
       {sub === "activity" && <ActivitySection />}
@@ -70,7 +76,7 @@ export function AdminScreen() {
 /* ------------------------------------------------------------- users ----- */
 
 function UsersSection() {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const users = useDbQuery<AdminUserRow[]>(() => adminRepo.listUsers(session), [session?.userId], []);
   const [busy, setBusy] = useState(false);
   const [openFor, setOpenFor] = useState<number | null>(null);
@@ -117,7 +123,7 @@ function UsersSection() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle>{`Accounts (${users.length})`}</CardTitle></CardHeader>
+        <CardHeader><CardTitle>{`${tr("Accounts", lang)} (${users.length})`}</CardTitle></CardHeader>
         <CardContent>
           {users.map((u) => (
             <View key={u.id} style={s.card}>
@@ -132,7 +138,7 @@ function UsersSection() {
               </View>
 
               <Muted style={{ marginTop: spacing.sm }}>
-                {u.roles.length === 0 ? "No roles" : `Roles: ${u.roles.join(", ")}`}
+                {u.roles.length === 0 ? "No roles" : `${tr("Roles:", lang)} ${u.roles.join(", ")}`}
               </Muted>
               <Muted>
                 {u.profiles.length === 0
@@ -219,14 +225,14 @@ function LinkProfile({ userId, onDone }: { userId: number; onDone: () => void })
 /* ----------------------------------------------------------- parties ----- */
 
 function PartiesSection() {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const parties = useDbQuery<AdminPartyRow[]>(() => adminRepo.listParties(session), [session?.userId], []);
   const [busy, setBusy] = useState(false);
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{`Parties (${parties.length})`}</CardTitle>
+        <CardTitle>{`${tr("Parties", lang)} (${parties.length})`}</CardTitle>
         <Muted>
           Deactivating removes a party from matching and closes its open postings.
           Its orders, ledger lines and reviews stay — those belong to the people it
@@ -241,9 +247,9 @@ function PartiesSection() {
                 color={p.isActive ? colors.foreground : colors.mutedForeground}>
                 {p.name}
               </Text>
-              <Muted>{`${p.kind}${p.orderCount > 0 ? ` · ${p.orderCount} orders` : ""}`}</Muted>
+              <Muted>{`${tr(p.kind, lang)}${p.orderCount > 0 ? ` · ${p.orderCount} ${p.orderCount === 1 ? tr("order", lang) : tr("orders", lang)}` : ""}`}</Muted>
             </View>
-            <Toggle checked={p.isActive} accent={colors.primary} label=""
+            <Toggle checked={p.isActive} accent={colors.primary}
               onChange={async (v) => {
                 if (busy) return;
                 setBusy(true);
@@ -263,6 +269,67 @@ function PartiesSection() {
   );
 }
 
+/* -------------------------------------------------------------- buyers ---- */
+
+/**
+ * What buyers require, editable without a buyer login.
+ *
+ * Only `buyer01` (Sahyadri Foods) has an account. The other buyers have parties
+ * and a `buyer_requirements` row, same as any other buyer, but nobody can sign
+ * in as them to state or change what they need — the service desk above is in
+ * the same position for lenders and auditors. This is that same accommodation
+ * for buyers: the form is the buyer's own Buyer Readiness & Market Qualification
+ * form, unchanged, just pointed at a buyer id an admin picked instead of the
+ * signed-in session's own profile.
+ */
+function BuyersSection() {
+  const { session, lang } = useApp();
+  const buyers = useDbQuery<Buyer[]>(() => marketRepo.listBuyers(), [], []);
+  const [openFor, setOpenFor] = useState<string | null>(null);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{`${tr("Buyers", lang)} (${buyers.length})`}</CardTitle>
+        <Muted>
+          Requirements set here are what an FPO's readiness score is measured
+          against on Market-Linked Growth Planning — independently for each buyer.
+        </Muted>
+      </CardHeader>
+      <CardContent>
+        {buyers.map((b) => (
+          <View key={b.id} style={s.card}>
+            <View style={s.rowBetween}>
+              <View style={{ flex: 1 }}>
+                <Text size="sm" weight="700">{b.name}</Text>
+                <Muted>
+                  {`${b.type} · ${b.location}`}
+                  {b.commodities.length > 0 ? ` · ${b.commodities.join(", ")}` : ""}
+                </Muted>
+              </View>
+              <Button variant="ghost" size="sm" accent={colors.primary}
+                style={{ alignSelf: "flex-start", paddingHorizontal: 0 }}
+                onPress={() => setOpenFor(openFor === b.id ? null : b.id)}>
+                {openFor === b.id ? "Hide" : "Manage"}
+              </Button>
+            </View>
+
+            {openFor === b.id && (
+              <View style={s.inner}>
+                <BuyerReadinessForm key={b.id} buyerId={b.id}
+                  onSave={(input) => adminRepo.updateBuyerRequirements(session, b.id, input)}
+                  onSaved={() => {}}
+                  saveLabel="Save requirements"
+                  successMessage={`Requirements saved for ${b.name}.`} />
+              </View>
+            )}
+          </View>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
 /* ------------------------------------------------------ service desk ----- */
 
 /**
@@ -273,7 +340,7 @@ function PartiesSection() {
  * admin decided it rather than implying the lender answered.
  */
 function ServiceDeskSection() {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const requests = useDbQuery(() => adminRepo.listAllServiceRequests(session), [session?.userId], []);
   const [busy, setBusy] = useState(false);
 
@@ -282,7 +349,7 @@ function ServiceDeskSection() {
     setBusy(true);
     try {
       await adminRepo.advanceServiceRequest(session, id, to);
-      toast.success(`Request marked ${to.replace("_", " ")}.`);
+      toast.success(`${tr("Request marked", lang)} ${tr(to.replace("_", " "), lang)}.`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not update that request."));
     } finally {
@@ -297,7 +364,7 @@ function ServiceDeskSection() {
     <>
       <Card>
         <CardHeader>
-          <CardTitle>{`Open requests (${open.length})`}</CardTitle>
+          <CardTitle>{`${tr("Open requests", lang)} (${open.length})`}</CardTitle>
           <Muted>Providers do not have their own logins yet, so these are processed here.</Muted>
         </CardHeader>
         <CardContent>
@@ -313,7 +380,7 @@ function ServiceDeskSection() {
                   )}
                 </View>
                 <Badge color={colors.mutedForeground} bg={colors.muted}>
-                  {r.status.replace("_", " ")}
+                  {tr(r.status.replace("_", " "), lang)}
                 </Badge>
               </View>
               <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm, flexWrap: "wrap" }}>
@@ -350,7 +417,7 @@ function ServiceDeskSection() {
                 <Badge
                   color={r.status === "approved" || r.status === "completed" ? "#ffffff" : colors.mutedForeground}
                   bg={r.status === "approved" || r.status === "completed" ? colors.farmer : colors.muted}>
-                  {r.status}
+                  {tr(r.status, lang)}
                 </Badge>
               </View>
             ))}
@@ -364,7 +431,7 @@ function ServiceDeskSection() {
 /* -------------------------------------------------------- moderation ----- */
 
 function ModerationSection() {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const disputes = useDbQuery(() => adminRepo.listDisputes(session), [session?.userId], []);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -375,7 +442,7 @@ function ModerationSection() {
     try {
       await adminRepo.resolveDispute(session, orderId, to, note);
       setNote("");
-      toast.success(`Dispute resolved as ${to}.`);
+      toast.success(`${tr("Dispute resolved as", lang)} ${tr(to[0].toUpperCase() + to.slice(1), lang).toLowerCase()}.`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not resolve that."));
     } finally {
@@ -385,7 +452,7 @@ function ModerationSection() {
 
   return (
     <Card>
-      <CardHeader><CardTitle>{`Disputed orders (${disputes.length})`}</CardTitle></CardHeader>
+      <CardHeader><CardTitle>{`${tr("Disputed orders", lang)} (${disputes.length})`}</CardTitle></CardHeader>
       <CardContent>
         {disputes.length === 0 && <Muted>Nothing in dispute.</Muted>}
         {disputes.map((d) => (
@@ -417,12 +484,13 @@ function ModerationSection() {
 /* ---------------------------------------------------------- activity ----- */
 
 function ActivitySection() {
+  const { lang } = useApp();
   const events = useDbQuery<AuditEvent[]>(() => auditRepo.listRecent(100), [], []);
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{`Activity log (${events.length})`}</CardTitle>
+        <CardTitle>{`${tr("Activity log", lang)} (${events.length})`}</CardTitle>
         <Muted>Decisions that changed somebody else&apos;s standing, newest first.</Muted>
       </CardHeader>
       <CardContent>

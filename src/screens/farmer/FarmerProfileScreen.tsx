@@ -8,6 +8,8 @@ import { useSessionFarmer, useSessionFarmerId } from "../../lib/useSessionProfil
 import { farmerRepo, fpoRepo } from "../../db";
 import { useDbQuery } from "../../db/useDbQuery";
 import type { FPO } from "../../db/types";
+import { useApp } from "../../lib/app-state";
+import { tr } from "../../lib/i18n";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import { Badge, Button, Card, CardContent, Muted, Text } from "../../components/ui";
@@ -19,6 +21,7 @@ import { BackLink } from "../../components/common";
  */
 export function FarmerProfileScreen() {
   const nav = useNavigation();
+  const { lang } = useApp();
   const farmer = useSessionFarmer();
   const farmerId = useSessionFarmerId();
   const fpo = useDbQuery<FPO | null>(
@@ -80,11 +83,11 @@ export function FarmerProfileScreen() {
       <ProfileRow icon={<LandPlot size={16} color={colors.farmer} />} label="Land Holding"
         value={`${farmer.landAcres} acres (${landHa} ha)`} />
       <ProfileRow icon={<Sprout size={16} color={colors.farmer} />} label="Crops Currently Sown"
-        value={farmer.crops.join(", ")} />
+        value={farmer.crops.map((c) => tr(c, lang)).join(", ")} />
       <ProfileRow icon={<FileBadge size={16} color={colors.farmer} />} label="Survey / Khasra No."
         value={`${surveyNo} · ${khasra}`} />
       <ProfileRow icon={<Building2 size={16} color={colors.farmer} />} label="FPO Membership"
-        value={`${fpo.name} · ${(farmer.sharePct * 100).toFixed(2)}% equity`} />
+        value={`${tr(fpo.name, lang)} · ${farmer.sharePct.toFixed(2)}% ${tr("equity", lang)}`} />
       <ProfileRow icon={<Calendar size={16} color={colors.farmer} />} label="Member Since"
         value={farmer.memberSince ?? "—"} />
 
@@ -96,8 +99,8 @@ export function FarmerProfileScreen() {
           {farmer.txns.map((t, i) => (
             <View key={i} style={s.txn}>
               <View style={{ flex: 1 }}>
-                <Text size="sm" weight="600">{`${t.crop} · ${t.qty_q} q`}</Text>
-                <Muted>{`${t.date}${t.refId ? ` · Ref ${t.refId}` : ""}`}</Muted>
+                <Text size="sm" weight="600">{`${tr(t.crop, lang)} · ${t.qty_q} q`}</Text>
+                <Muted>{`${t.date}${t.refId ? ` · ${tr("Ref", lang)} ${t.refId}` : ""}`}</Muted>
               </View>
               <View style={{ alignItems: "flex-end" }}>
                 <Text size="sm" weight="700">{`₹${t.amount.toLocaleString("en-IN")}`}</Text>

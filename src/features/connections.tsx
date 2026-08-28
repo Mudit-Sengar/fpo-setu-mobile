@@ -6,6 +6,7 @@ import { describeWriteError } from "../db/authz";
 import type { ConnectionRow, MessageRow, RelationType } from "../db/repositories/networkRepository";
 import { useDbQuery } from "../db/useDbQuery";
 import { useApp } from "../lib/app-state";
+import { tr } from "../lib/i18n";
 import { colors, radius, spacing } from "../theme";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Muted, Text, toast } from "../components/ui";
 
@@ -37,7 +38,7 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 export function ConnectionsPanel({ accent }: { accent: string }) {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const connections = useDbQuery<ConnectionRow[]>(
     () => networkRepo.listConnections(session), [session?.partyId], []);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -49,9 +50,9 @@ export function ConnectionsPanel({ accent }: { accent: string }) {
     try {
       await networkRepo.decideConnection(session, c.id, decision);
       toast.success(
-        decision === "accepted" ? `Connected with ${c.otherName}.`
-        : decision === "blocked" ? `Blocked ${c.otherName}.`
-        : `Declined ${c.otherName}.`);
+        decision === "accepted" ? `${tr("Connected with", lang)} ${c.otherName}.`
+        : decision === "blocked" ? `${tr("Blocked", lang)} ${c.otherName}.`
+        : `${tr("Declined", lang)} ${c.otherName}.`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not record that decision."));
     } finally {
@@ -83,7 +84,7 @@ export function ConnectionsPanel({ accent }: { accent: string }) {
         <CardHeader>
           <View style={s.titleRow}>
             <UserPlus size={16} color={accent} />
-            <CardTitle>{`Requests waiting on you (${incoming.length})`}</CardTitle>
+            <CardTitle>{`${tr("Requests waiting on you", lang)} (${incoming.length})`}</CardTitle>
           </View>
         </CardHeader>
         <CardContent>
@@ -93,7 +94,7 @@ export function ConnectionsPanel({ accent }: { accent: string }) {
               <View style={s.rowBetween}>
                 <View style={{ flex: 1 }}>
                   <Text size="sm" weight="700">{c.otherName}</Text>
-                  <Muted>{`${KIND_LABEL[c.otherKind] ?? c.otherKind} · ${RELATION_LABEL[c.relationType]}`}</Muted>
+                  <Muted>{`${tr(KIND_LABEL[c.otherKind] ?? c.otherKind, lang)} · ${tr(RELATION_LABEL[c.relationType], lang)}`}</Muted>
                 </View>
                 <Badge color="#ffffff" bg={accent}>Pending</Badge>
               </View>
@@ -121,7 +122,7 @@ export function ConnectionsPanel({ accent }: { accent: string }) {
         <CardHeader>
           <View style={s.titleRow}>
             <MessageCircle size={16} color={accent} />
-            <CardTitle>{`Your connections (${accepted.length})`}</CardTitle>
+            <CardTitle>{`${tr("Your connections", lang)} (${accepted.length})`}</CardTitle>
           </View>
         </CardHeader>
         <CardContent>
@@ -133,10 +134,10 @@ export function ConnectionsPanel({ accent }: { accent: string }) {
               <View style={s.rowBetween}>
                 <View style={{ flex: 1 }}>
                   <Text size="sm" weight="700">{c.otherName}</Text>
-                  <Muted>{`${KIND_LABEL[c.otherKind] ?? c.otherKind} · ${RELATION_LABEL[c.relationType]}`}</Muted>
+                  <Muted>{`${tr(KIND_LABEL[c.otherKind] ?? c.otherKind, lang)} · ${tr(RELATION_LABEL[c.relationType], lang)}`}</Muted>
                 </View>
                 {c.unreadCount > 0 && (
-                  <Badge color="#ffffff" bg={accent}>{`${c.unreadCount} new`}</Badge>
+                  <Badge color="#ffffff" bg={accent}>{`${c.unreadCount} ${tr("new", lang)}`}</Badge>
                 )}
               </View>
               {c.conversationId != null && (
@@ -156,7 +157,7 @@ export function ConnectionsPanel({ accent }: { accent: string }) {
 
       {outgoing.length > 0 && (
         <Card>
-          <CardHeader><CardTitle>{`Sent, awaiting a reply (${outgoing.length})`}</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{`${tr("Sent, awaiting a reply", lang)} (${outgoing.length})`}</CardTitle></CardHeader>
           <CardContent>
             {outgoing.map((c) => (
               <View key={c.id} style={s.card}>
@@ -203,7 +204,7 @@ export function ConnectionsPanel({ accent }: { accent: string }) {
  * the other party sees what was said and can answer it.
  */
 export function Thread({ conversationId, accent }: { conversationId: number; accent: string }) {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const messages = useDbQuery<MessageRow[]>(
     () => networkRepo.listMessages(session, conversationId),
     [conversationId, session?.partyId], []);
@@ -250,7 +251,7 @@ export function Thread({ conversationId, accent }: { conversationId: number; acc
         </View>
         <Pressable onPress={send} disabled={sending}
           style={[s.sendBtn, { backgroundColor: accent }, sending && { opacity: 0.5 }]}
-          accessibilityRole="button" accessibilityLabel="Send">
+          accessibilityRole="button" accessibilityLabel={tr("Send", lang)}>
           <Send size={14} color="#ffffff" />
         </Pressable>
       </View>

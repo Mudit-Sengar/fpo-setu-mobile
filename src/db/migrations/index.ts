@@ -10,6 +10,7 @@ import { MIGRATION_008 } from "./008_reviews";
 import { MIGRATION_009 } from "./009_readiness";
 import { MIGRATION_010 } from "./010_geography";
 import { MIGRATION_011 } from "./011_services";
+import { MIGRATION_012 } from "./012_notifications_order_id_repair";
 
 /**
  * Ordered migrations. Append new entries; never renumber or edit a shipped one.
@@ -31,6 +32,7 @@ const MIGRATIONS: { version: number; statements: string[] }[] = [
   { version: 9, statements: MIGRATION_009 },
   { version: 10, statements: MIGRATION_010 },
   { version: 11, statements: MIGRATION_011 },
+  { version: 12, statements: MIGRATION_012 },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length;
@@ -46,7 +48,15 @@ export async function runMigrations(db: DB): Promise<void> {
     // Each migration is one transaction: a partial schema is worse than none.
     await db.transaction(async (tx) => {
       for (const statement of m.statements) {
-        await tx.execute(statement);
+        try {
+          await tx.execute(statement);
+        } catch (e) {
+          // An ADD COLUMN whose column is already there means this exact change
+          // already landed on this device (see migration 012) — not a failure.
+          const alreadyAdded = /ALTER TABLE .* ADD COLUMN/i.test(statement)
+            && /duplicate column name/i.test(e instanceof Error ? e.message : String(e));
+          if (!alreadyAdded) throw e;
+        }
       }
       // PRAGMA can't be parameterised, and `version` is an integer literal we control.
       await tx.execute(`PRAGMA user_version = ${m.version};`);

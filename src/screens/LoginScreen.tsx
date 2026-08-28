@@ -7,6 +7,7 @@ import {
   AlertCircle, Check, Globe, LogIn, Package, Shield, ShoppingBag, Sprout, Warehouse,
 } from "lucide-react-native";
 import { LANG_LABELS, useApp, type Lang, type Role } from "../lib/app-state";
+import { tr } from "../lib/i18n";
 import { VIEW_ROLES } from "../services/authService";
 import { accentColors, accentForRole, colors, radius, spacing } from "../theme";
 import { Button, Input, Label, Muted, Text } from "../components/ui";
@@ -73,9 +74,9 @@ export function LoginScreen() {
       <View style={s.header}>
         <View style={s.brand}>
           <View style={s.logoBox}><Sprout size={16} color={colors.primaryForeground} /></View>
-          <Text size="base" weight="700">FPO Setu</Text>
+          <Text size="base" weight="700" numberOfLines={1}>FPO Setu</Text>
         </View>
-        <Pressable onPress={() => setLangOpen(true)} style={s.langBtn} accessibilityLabel="Language">
+        <Pressable onPress={() => setLangOpen(true)} style={s.langBtn} accessibilityLabel={tr("Language", lang)}>
           <Globe size={14} color={colors.mutedForeground} />
           <Text size="xxs" weight="600" noTranslate>{LANG_LABELS[lang]}</Text>
         </Pressable>
@@ -143,7 +144,7 @@ export function LoginScreen() {
                         disabled={busy}
                         accessibilityRole="radio"
                         accessibilityState={{ selected: active }}
-                        accessibilityLabel={`Sign in as ${ROLE_META[r].label}`}
+                        accessibilityLabel={`${tr("Sign in as", lang)} ${tr(ROLE_META[r].label, lang)}`}
                         style={[
                           s.roleChip,
                           active && { backgroundColor: a, borderColor: a },
@@ -232,7 +233,7 @@ const s = StyleSheet.create({
     paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
     borderBottomWidth: 1, borderBottomColor: colors.border,
   },
-  brand: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  brand: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flexShrink: 1, minWidth: 0 },
   logoBox: {
     width: 32, height: 32, borderRadius: radius.md, backgroundColor: colors.primary,
     alignItems: "center", justifyContent: "center",

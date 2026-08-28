@@ -3,6 +3,7 @@ import { AuthzError, requireAdmin, type SessionContext } from "../authz";
 import { record } from "./auditRepository";
 import { hashPassword } from "../../lib/crypto/password";
 import type { RoleCode } from "./authRepository";
+import { writeBuyerRequirementsTx, type RequirementsUpdate } from "./readinessRepository";
 
 /**
  * Administration: accounts, roles, profile links, and taking a party out of the
@@ -384,6 +385,28 @@ export async function listAllServiceRequests(
       amount: r.amount_requested == null ? null : Number(r.amount_requested),
     }));
   });
+}
+
+/**
+ * Sets one buyer's requirements on their behalf.
+ *
+ * Buyers b-2 through b-6 have a party and a requirements row but no login of
+ * their own yet — the same situation lenders and auditors are in on the service
+ * desk above. Until a buyer has an account, an administrator maintains what they
+ * require so the Market-Linked Growth Planning screen has more than one buyer to
+ * assess an FPO against.
+ */
+export async function updateBuyerRequirements(
+  ctx: SessionContext | null, buyerId: string, input: RequirementsUpdate,
+): Promise<void> {
+  requireAdmin(ctx);
+
+  await withWrite("adminUpdateBuyerRequirements", (db) => db.transaction(async (tx) => {
+    await writeBuyerRequirementsTx(tx, buyerId, input);
+    await record(tx, ctx, {
+      action: "buyer_requirements_updated", entityType: "buyer", entityId: buyerId,
+    });
+  }));
 }
 
 /** Removes a review. Moderation of last resort, and always recorded. */

@@ -3,6 +3,7 @@ import { Modal, Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Check, ChevronLeft, Globe, Shield, Sprout, User } from "lucide-react-native";
 import { useApp, LANG_LABELS, type Lang, type Role } from "../../lib/app-state";
+import { tr } from "../../lib/i18n";
 import { farmerRepo, fpoRepo } from "../../db";
 import { useDbQuery } from "../../db/useDbQuery";
 import type { FPO, Farmer } from "../../db/types";
@@ -49,7 +50,7 @@ export function TopBar({
               style={s.backBtn}
               hitSlop={10}
               accessibilityRole="button"
-              accessibilityLabel="Go back"
+              accessibilityLabel={tr("Go back", lang)}
             >
               <ChevronLeft size={22} color={accentColor} />
             </Pressable>
@@ -59,11 +60,11 @@ export function TopBar({
               <Pressable
                 onPress={onOpenFarmerProfile}
                 style={[s.avatar, { backgroundColor: colors.farmer }]}
-                accessibilityLabel="Open farmer profile"
+                accessibilityLabel={tr("Open farmer profile", lang)}
               >
                 <User size={16} color={colors.farmerForeground} />
               </Pressable>
-              <Pressable onPress={onOpenFarmerProfile} style={{ flex: 1 }}>
+              <Pressable onPress={onOpenFarmerProfile} style={{ flex: 1, minWidth: 0 }}>
                 <Muted>Hi</Muted>
                 <Text size="sm" weight="700" color={colors.farmer} numberOfLines={1}>{farmer.name}</Text>
               </Pressable>
@@ -73,7 +74,7 @@ export function TopBar({
               <View style={[s.logoBox, { backgroundColor: colors.fpo }]}>
                 <Sprout size={16} color={colors.fpoForeground} />
               </View>
-              <View style={{ flex: 1 }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
                 <Text size="xxs" weight="600" color={colors.mutedForeground}>FPO</Text>
                 <Text size="sm" weight="700" color={colors.fpo} numberOfLines={1}>
                   {(fpo?.name ?? "").split(" Farmer")[0]}
@@ -85,9 +86,11 @@ export function TopBar({
               <View style={[s.logoBox, { backgroundColor: colors.primary }]}>
                 <Sprout size={16} color={colors.primaryForeground} />
               </View>
-              <View style={{ flex: 1 }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
                 <Text size="base" weight="700" color={accentColor} numberOfLines={1}>{t("appName")}</Text>
-                <Text size="xxs" color={colors.mutedForeground} numberOfLines={1}>{t("tagline")}</Text>
+                {session?.isAdmin !== true && (
+                  <Text size="xxs" color={colors.mutedForeground} numberOfLines={1}>{t("tagline")}</Text>
+                )}
               </View>
             </>
           )}
@@ -100,7 +103,7 @@ export function TopBar({
             <Pressable
               onPress={() => setRoleOpen(true)}
               style={[s.langBtn, { borderColor: accentColor }]}
-              accessibilityLabel="Switch role view"
+              accessibilityLabel={tr("Switch role view", lang)}
             >
               <Shield size={14} color={accentColor} />
               <Text size="xxs" weight="700" color={accentColor} noTranslate>
@@ -108,7 +111,7 @@ export function TopBar({
               </Text>
             </Pressable>
           )}
-          <Pressable onPress={() => setLangOpen(true)} style={s.langBtn} accessibilityLabel="Language">
+          <Pressable onPress={() => setLangOpen(true)} style={s.langBtn} accessibilityLabel={tr("Language", lang)}>
             <Globe size={14} color={colors.mutedForeground} />
             <Text size="xxs" weight="600">{LANG_LABELS[lang]}</Text>
           </Pressable>
@@ -123,7 +126,7 @@ export function TopBar({
           <View style={s.sheet}>
             <View style={{ padding: spacing.lg, paddingBottom: spacing.sm }}>
               <Text size="sm" weight="700">Switch view</Text>
-              <Muted>{`Signed in as ${session?.displayName ?? ""}`}</Muted>
+              <Muted>{`${tr("Signed in as", lang)} ${session?.displayName ?? ""}`}</Muted>
             </View>
             {(session?.viewableRoles ?? []).map((r: Role) => (
               <Pressable

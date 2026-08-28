@@ -17,6 +17,8 @@ import {
   type ViewStyle,
 } from "react-native";
 import { Check, ChevronDown, ChevronUp, Star, X } from "lucide-react-native";
+import { useApp } from "../../lib/app-state";
+import { tr } from "../../lib/i18n";
 import { colors, radius, spacing } from "../../theme";
 import { Text, Muted } from "./Text";
 
@@ -107,7 +109,7 @@ export function Button({
     >
       {icon}
       {children != null && (
-        <Text size={size === "sm" ? "xs" : "sm"} weight="600" color={fg}>{children}</Text>
+        <Text size={size === "sm" ? "xs" : "sm"} weight="600" color={fg} numberOfLines={1}>{children}</Text>
       )}
     </Pressable>
   );
@@ -198,11 +200,12 @@ export function Input({
   onSubmitEditing?: () => void;
   returnKeyType?: "done" | "go" | "next" | "search" | "send";
 }) {
+  const { lang } = useApp();
   return (
     <TextInput
       value={value}
       onChangeText={onChangeText}
-      placeholder={placeholder}
+      placeholder={placeholder ? tr(placeholder, lang) : placeholder}
       placeholderTextColor={colors.mutedForeground}
       keyboardType={keyboardType}
       multiline={multiline}

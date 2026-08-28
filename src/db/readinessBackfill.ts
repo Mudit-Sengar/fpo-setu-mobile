@@ -3,8 +3,12 @@ import type { DB } from "@op-engineering/op-sqlite";
 /**
  * Gives the readiness tables a starting position from what the app already knew.
  *
- * Nothing here invents a requirement. Each row comes from a column that already
- * implied it:
+ * The six buyers seeded with the app (`CURATED_REQUIREMENTS` below) get an
+ * explicit, realistic requirement set — several distinct items each, so that a
+ * readiness assessment has more than one thing to be partly right about. Every
+ * other buyer — one an administrator adds later, or one that fills its own
+ * Buyer Readiness form — is derived conservatively from columns that already
+ * implied a requirement, same as before this map existed:
  *
  *  - a buyer's `buyer_commodities` say what they buy, which is the same list the
  *    readiness form asks for under "Commodity";
@@ -56,6 +60,100 @@ function percentNear(text: string, keyword: string): number | null {
   return m == null ? null : Number(m[1]);
 }
 
+interface CuratedRequirement {
+  quantity: number | null;
+  unit: string;
+  moistureMax: number | null;
+  foreignMatterMax: number | null;
+  gradingStandard: string | null;
+  packagingStandard: string;
+  traceabilityRequired: boolean;
+  traceabilityNote: string;
+  residueLimits: string;
+  storageCapacityRequiredMt: number | null;
+  states: string[];
+  seasons: string[];
+  certifications: string[];
+  infrastructure: string[];
+  compliance: string[];
+}
+
+/**
+ * What each seeded buyer actually requires, spelled out rather than guessed at
+ * from `quality_specs` prose.
+ *
+ * The keyword parser below this still runs for any buyer not listed here — an
+ * administrator adding a new buyer through the Buyers section on Admin, or a
+ * buyer signing in and filling their own form, needs nothing added here to be
+ * matched against. This map exists so the six buyers seeded with the app start
+ * with more than one FPO can ever satisfy in full — a buyer who only ever needed
+ * one thing was never a very useful demonstration that matching works per
+ * requirement, per buyer, independently.
+ */
+const CURATED_REQUIREMENTS: Record<string, CuratedRequirement> = {
+  "b-1": { // Sahyadri Foods — Processor, Nashik. Grade A, traceable, mid-scale.
+    quantity: 800, unit: "MT", moistureMax: 5, foreignMatterMax: 2,
+    gradingStandard: "Grade A", packagingStandard: "50 kg HDPE woven bags, lot-coded",
+    traceabilityRequired: true, traceabilityNote: "Farm-to-FPO lot traceability with QR code",
+    residueLimits: "", storageCapacityRequiredMt: 100,
+    states: ["Maharashtra"], seasons: ["Rabi", "Kharif"],
+    certifications: ["FSSAI"],
+    infrastructure: ["Warehouse", "Sorting Line", "Grading Machine"],
+    compliance: ["GST Registration", "FSSAI License"],
+  },
+  "b-2": { // FreshKart Retail — Modern Retail, Mumbai. Cold-chain, year-round.
+    quantity: 500, unit: "MT", moistureMax: null, foreignMatterMax: 1,
+    gradingStandard: "Grade A", packagingStandard: "Ventilated plastic crates, cold-chain handling",
+    traceabilityRequired: true, traceabilityNote: "Batch-level cold-chain tracking to store delivery",
+    residueLimits: "", storageCapacityRequiredMt: 50,
+    states: ["Maharashtra"], seasons: ["Year-round"],
+    certifications: [],
+    infrastructure: ["Cold Storage", "Sorting Line", "Digital Record Keeping"],
+    compliance: ["GST Registration", "FSSAI License", "Bank Account"],
+  },
+  "b-3": { // Pune Wholesale Mandi Traders — Wholesaler, Pune. High volume, spot.
+    quantity: 1500, unit: "MT", moistureMax: null, foreignMatterMax: null,
+    gradingStandard: null, packagingStandard: "Mandi-standard jute or HDPE sacks",
+    traceabilityRequired: false, traceabilityNote: "",
+    residueLimits: "", storageCapacityRequiredMt: 200,
+    states: ["Maharashtra"], seasons: ["Rabi"],
+    certifications: [],
+    infrastructure: ["Warehouse"],
+    compliance: ["GST Registration", "PAN"],
+  },
+  "b-4": { // AgriExport India — Exporter, JNPT. Strict export-grade requirements.
+    quantity: 1200, unit: "MT", moistureMax: 8, foreignMatterMax: 0.5,
+    gradingStandard: "Export grade", packagingStandard: "Export cartons with phytosanitary labelling",
+    traceabilityRequired: true, traceabilityNote: "Full export traceability, APEDA-registered lots",
+    residueLimits: "MRL compliant with destination-market norms",
+    storageCapacityRequiredMt: 300,
+    states: ["Maharashtra"], seasons: ["Rabi"],
+    certifications: ["APEDA", "Global GAP"],
+    infrastructure: ["Cold Storage", "Testing Facility", "Grading Machine"],
+    compliance: ["FSSAI License", "Insurance"],
+  },
+  "b-5": { // Patanjali Procurement — Development, Aurangabad. Contract farming.
+    quantity: 2000, unit: "MT", moistureMax: null, foreignMatterMax: null,
+    gradingStandard: "Sortex / Grade A", packagingStandard: "",
+    traceabilityRequired: true, traceabilityNote: "Contract-farming compliance records per plot",
+    residueLimits: "", storageCapacityRequiredMt: 250,
+    states: ["Maharashtra"], seasons: ["Rabi"],
+    certifications: ["Organic"],
+    infrastructure: ["Warehouse", "Cleaning Unit", "Testing Facility"],
+    compliance: ["Producer Company Registration", "Audited Financial Statements"],
+  },
+  "b-6": { // Local HORECA Supplies — Spot, Pune. Small, daily-fresh.
+    quantity: 80, unit: "MT", moistureMax: null, foreignMatterMax: null,
+    gradingStandard: "Grade A", packagingStandard: "Daily-fresh crates",
+    traceabilityRequired: false, traceabilityNote: "",
+    residueLimits: "", storageCapacityRequiredMt: 10,
+    states: ["Maharashtra"], seasons: ["Year-round"],
+    certifications: [],
+    infrastructure: ["Cold Storage"],
+    compliance: ["FSSAI License"],
+  },
+};
+
 export async function backfillReadiness(db: DB): Promise<void> {
   /* ------------------------------------------------- buyers -> requirements */
   const buyers = (await db.execute(
@@ -65,23 +163,36 @@ export async function backfillReadiness(db: DB): Promise<void> {
     const buyerId = str(b.id);
     const specs = str(b.quality_specs);
     const lower = specs.toLowerCase();
+    const curated = CURATED_REQUIREMENTS[buyerId];
 
     const done = (await db.execute(
       "SELECT 1 AS ok FROM buyer_requirements WHERE buyer_id = ?;", [buyerId])).rows ?? [];
     if (done.length === 0) {
-      await db.execute(
-        `INSERT INTO buyer_requirements
-           (buyer_id, quantity, unit, moisture_max, foreign_matter_max,
-            grading_standard, traceability_required)
-         VALUES (?,?,'MT',?,?,?,?);`,
-        [buyerId, Number(b.typical_volume_mt ?? 0) || null,
-          percentNear(specs, "moisture"),
-          percentNear(specs, "foreign matter"),
-          // "Grade A" / "Sortex" / "Export grade" appear verbatim in the specs.
-          lower.includes("export") ? "Export"
-            : lower.includes("sortex") ? "Sortex"
-              : lower.includes("grade a") ? "Grade A" : null,
-          lower.includes("traceab") ? 1 : 0]);
+      if (curated != null) {
+        await db.execute(
+          `INSERT INTO buyer_requirements
+             (buyer_id, quantity, unit, moisture_max, foreign_matter_max, grading_standard,
+              packaging_standard, traceability_required, traceability_note, residue_limits,
+              storage_capacity_required_mt)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?);`,
+          [buyerId, curated.quantity, curated.unit, curated.moistureMax, curated.foreignMatterMax,
+            curated.gradingStandard, curated.packagingStandard, curated.traceabilityRequired ? 1 : 0,
+            curated.traceabilityNote, curated.residueLimits, curated.storageCapacityRequiredMt]);
+      } else {
+        await db.execute(
+          `INSERT INTO buyer_requirements
+             (buyer_id, quantity, unit, moisture_max, foreign_matter_max,
+              grading_standard, traceability_required)
+           VALUES (?,?,'MT',?,?,?,?);`,
+          [buyerId, Number(b.typical_volume_mt ?? 0) || null,
+            percentNear(specs, "moisture"),
+            percentNear(specs, "foreign matter"),
+            // "Grade A" / "Sortex" / "Export grade" appear verbatim in the specs.
+            lower.includes("export") ? "Export"
+              : lower.includes("sortex") ? "Sortex"
+                : lower.includes("grade a") ? "Grade A" : null,
+            lower.includes("traceab") ? 1 : 0]);
+      }
     }
 
     // What they buy is what they require.
@@ -89,14 +200,37 @@ export async function backfillReadiness(db: DB): Promise<void> {
       `INSERT OR IGNORE INTO buyer_requirement_commodities (buyer_id, commodity)
          SELECT buyer_id, commodity FROM buyer_commodities WHERE buyer_id = ?;`, [buyerId]);
 
-    // Certifications named in the spec text, and only those.
-    for (const cert of CERTIFICATIONS) {
-      const named = lower.includes(cert.toLowerCase())
-        || (cert === "APEDA" && lower.includes("phyto"));
-      if (named) {
+    if (curated != null) {
+      for (const state of curated.states) {
         await db.execute(
-          "INSERT OR IGNORE INTO buyer_required_certifications (buyer_id, certification) VALUES (?, ?);",
-          [buyerId, cert]);
+          "INSERT OR IGNORE INTO buyer_requirement_states (buyer_id, state) VALUES (?, ?);", [buyerId, state]);
+      }
+      for (const season of curated.seasons) {
+        await db.execute(
+          "INSERT OR IGNORE INTO buyer_requirement_seasons (buyer_id, season) VALUES (?, ?);", [buyerId, season]);
+      }
+      for (const cert of curated.certifications) {
+        await db.execute(
+          "INSERT OR IGNORE INTO buyer_required_certifications (buyer_id, certification) VALUES (?, ?);", [buyerId, cert]);
+      }
+      for (const item of curated.infrastructure) {
+        await db.execute(
+          "INSERT OR IGNORE INTO buyer_required_infrastructure (buyer_id, item) VALUES (?, ?);", [buyerId, item]);
+      }
+      for (const item of curated.compliance) {
+        await db.execute(
+          "INSERT OR IGNORE INTO buyer_required_compliance (buyer_id, item) VALUES (?, ?);", [buyerId, item]);
+      }
+    } else {
+      // Certifications named in the spec text, and only those.
+      for (const cert of CERTIFICATIONS) {
+        const named = lower.includes(cert.toLowerCase())
+          || (cert === "APEDA" && lower.includes("phyto"));
+        if (named) {
+          await db.execute(
+            "INSERT OR IGNORE INTO buyer_required_certifications (buyer_id, certification) VALUES (?, ?);",
+            [buyerId, cert]);
+        }
       }
     }
   }

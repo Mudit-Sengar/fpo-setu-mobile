@@ -6,6 +6,7 @@ import { describeWriteError } from "../db/authz";
 import type { OrderRow, OrderStatus } from "../db/repositories/orderRepository";
 import { useDbQuery } from "../db/useDbQuery";
 import { useApp } from "../lib/app-state";
+import { tr } from "../lib/i18n";
 import { colors, radius, spacing } from "../theme";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Muted, Text, toast } from "../components/ui";
 
@@ -48,7 +49,7 @@ function actionsFor(o: OrderRow): { to: OrderStatus; label: string }[] {
 }
 
 export function OrdersPanel({ accent }: { accent: string }) {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const orders = useDbQuery<OrderRow[]>(() => orderRepo.listMyOrders(session), [session?.partyId], []);
   const [busyId, setBusyId] = useState<number | null>(null);
 
@@ -57,7 +58,7 @@ export function OrdersPanel({ accent }: { accent: string }) {
     setBusyId(o.id);
     try {
       await orderRepo.advance(session, o.id, to);
-      toast.success(`${o.orderNo}: ${label.toLowerCase()}.`);
+      toast.success(`${o.orderNo}: ${tr(label, lang).toLowerCase()}.`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not update that order."));
     } finally {
@@ -74,7 +75,7 @@ export function OrdersPanel({ accent }: { accent: string }) {
         <CardHeader>
           <View style={s.titleRow}>
             <Package size={16} color={accent} />
-            <CardTitle>{`Orders in progress (${open.length})`}</CardTitle>
+            <CardTitle>{`${tr("Orders in progress", lang)} (${open.length})`}</CardTitle>
           </View>
         </CardHeader>
         <CardContent>
@@ -88,10 +89,10 @@ export function OrdersPanel({ accent }: { accent: string }) {
                 <View style={s.rowBetween}>
                   <View style={{ flex: 1 }}>
                     <Text size="sm" weight="700">
-                      {`${o.qty} ${o.unit} ${o.commodity}${o.grade !== "" ? ` · Grade ${o.grade}` : ""}`}
+                      {`${o.qty} ${o.unit} ${o.commodity}${o.grade !== "" ? ` · ${tr("Grade", lang)} ${o.grade}` : ""}`}
                     </Text>
                     <Muted>
-                      {`${o.iAmSeller ? "To" : "From"} ${o.counterpartyName} · ${o.orderNo}`}
+                      {`${tr(o.iAmSeller ? "To" : "From", lang)} ${o.counterpartyName} · ${o.orderNo}`}
                     </Muted>
                   </View>
                   <Badge color={style.fg} bg={style.bg}>{style.label}</Badge>

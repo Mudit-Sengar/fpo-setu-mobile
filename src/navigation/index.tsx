@@ -9,6 +9,7 @@ import {
 } from "lucide-react-native";
 import { useApp } from "../lib/app-state";
 import { colors } from "../theme";
+import { Text } from "../components/ui";
 import type {
   BuyerTabParamList, FarmerStackParamList, FarmerTabParamList, FpoStackParamList, RootStackParamList,
 } from "./types";
@@ -38,6 +39,21 @@ const FpoStack = createNativeStackNavigator<FpoStackParamList>();
 const BuyerTabs = createBottomTabNavigator<BuyerTabParamList>();
 
 const tabLabelStyle = { fontSize: 10, fontWeight: "600" as const };
+
+/**
+ * Custom tab-bar label renderer. React Navigation's own `title`/default label
+ * renders through its internal Text component, which never touches the app's
+ * tr()-backed <Text> wrapper — so a plain string `title` never translates. This
+ * render prop hands the label to the app's own <Text> instead, which already
+ * reads the active language from useApp() and translates automatically.
+ */
+function tabLabel(text: string) {
+  return ({ color }: { color: string }) => (
+    <Text size={9} weight="600" color={color} center numberOfLines={2} style={{ width: 72 }}>
+      {text}
+    </Text>
+  );
+}
 
 /**
  * Tab bar height must account for the bottom safe-area inset, otherwise the
@@ -77,15 +93,15 @@ function FarmerTabNavigator() {
       }}
     >
       <FarmerTabs.Screen name="FarmerHome" component={FarmerHomeScreen}
-        options={{ title: "Home", tabBarIcon: ({ color }) => <Home size={20} color={color} /> }} />
+        options={{ title: "Home", tabBarLabel: tabLabel("Home"), tabBarIcon: ({ color }) => <Home size={20} color={color} /> }} />
       <FarmerTabs.Screen name="MyFpo" component={MyFpoScreen}
-        options={{ title: "My FPO", tabBarIcon: ({ color }) => <Building2 size={20} color={color} /> }} />
+        options={{ title: "My FPO", tabBarLabel: tabLabel("My FPO"), tabBarIcon: ({ color }) => <Building2 size={20} color={color} /> }} />
       <FarmerTabs.Screen name="Learn" component={LearnScreen}
-        options={{ title: "Learn", tabBarIcon: ({ color }) => <GraduationCap size={20} color={color} /> }} />
+        options={{ title: "Learn", tabBarLabel: tabLabel("Learn"), tabBarIcon: ({ color }) => <GraduationCap size={20} color={color} /> }} />
       <FarmerTabs.Screen name="Connect" component={ConnectScreen}
-        options={{ title: "Connect", tabBarIcon: ({ color }) => <Users size={20} color={color} /> }} />
+        options={{ title: "Connect", tabBarLabel: tabLabel("Connect"), tabBarIcon: ({ color }) => <Users size={20} color={color} /> }} />
       <FarmerTabs.Screen name="Schemes" component={SchemesScreen}
-        options={{ title: "Schemes", tabBarIcon: ({ color }) => <Landmark size={20} color={color} /> }} />
+        options={{ title: "Schemes", tabBarLabel: tabLabel("Schemes"), tabBarIcon: ({ color }) => <Landmark size={20} color={color} /> }} />
     </FarmerTabs.Navigator>
   );
 }
@@ -137,11 +153,11 @@ function BuyerNavigator() {
       }}
     >
       <BuyerTabs.Screen name="BuyerHome" component={BuyerHomeScreen}
-        options={{ title: "Profile & Order", tabBarIcon: ({ color }) => <ShoppingBag size={20} color={color} /> }} />
+        options={{ title: "Profile & Order", tabBarLabel: tabLabel("Profile & Order"), tabBarIcon: ({ color }) => <ShoppingBag size={20} color={color} /> }} />
       <BuyerTabs.Screen name="BuyerMatching" component={BuyerMatchingScreen}
-        options={{ title: "Connect", tabBarIcon: ({ color }) => <Handshake size={20} color={color} /> }} />
+        options={{ title: "Connect", tabBarLabel: tabLabel("Connect"), tabBarIcon: ({ color }) => <Handshake size={20} color={color} /> }} />
       <BuyerTabs.Screen name="BuyerReviews" component={BuyerReviewsScreen}
-        options={{ title: "Reviews", tabBarIcon: ({ color }) => <Star size={20} color={color} /> }} />
+        options={{ title: "Reviews", tabBarLabel: tabLabel("Reviews"), tabBarIcon: ({ color }) => <Star size={20} color={color} /> }} />
     </BuyerTabs.Navigator>
   );
 }

@@ -4,6 +4,7 @@ import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Briefcase, Building2, GraduationCap, Network } from "lucide-react-native";
 import { useApp } from "../../lib/app-state";
+import { tr } from "../../lib/i18n";
 import { fpoRepo } from "../../db";
 import { useDbQuery } from "../../db/useDbQuery";
 import type { FPO } from "../../db/types";
@@ -17,7 +18,7 @@ import type { FpoStackParamList } from "../../navigation/types";
 /** Ported from the web app's src/routes/fpo.index.tsx (FPO Bandhu home) */
 export function FpoHomeScreen() {
   const nav = useNavigation<NativeStackNavigationProp<FpoStackParamList>>();
-  const { activeFpoId } = useApp();
+  const { activeFpoId, lang } = useApp();
   const fpo = useDbQuery<FPO | null>(() => fpoRepo.getFpoById(activeFpoId), [activeFpoId], null);
   const fpoName = fpo?.name ?? "";
   const unread = useUnreadCount();
@@ -57,7 +58,7 @@ export function FpoHomeScreen() {
       {unread > 0 && (
         <View style={s.notice}>
           <Badge color={colors.fpoForeground} bg={colors.fpo}>
-            {`${unread} new ${unread === 1 ? "update" : "updates"}`}
+            {`${unread} ${tr("new", lang)} ${unread === 1 ? tr("update", lang) : tr("updates", lang)}`}
           </Badge>
           <Muted style={{ flex: 1 }}>
             Replies and connection requests are waiting in Find Partners → Inbox.

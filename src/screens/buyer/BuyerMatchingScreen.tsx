@@ -9,6 +9,7 @@ import { useDbQuery } from "../../db/useDbQuery";
 import type { FPO } from "../../db/types";
 import type { PeerFarmer } from "../../db/repositories/farmerRepository";
 import { useApp } from "../../lib/app-state";
+import { tr } from "../../lib/i18n";
 import { explainMatch, matchScore, type MatchBreakdown } from "../../lib/matching";
 import { formatQuantity } from "../../lib/quantity";
 import { colors, radius, spacing } from "../../theme";
@@ -55,7 +56,7 @@ interface Candidate {
 }
 
 function BuyerMatching() {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const fpos = useDbQuery<FPO[]>(() => fpoRepo.listFpos(), [], []);
 
   const [latest, setLatest] = useState<RequestRow | null>(null);
@@ -144,7 +145,7 @@ function BuyerMatching() {
         offeredQty: Math.min(qtyNum, c.request.qty),
         offeredUnit: "MT",
       });
-      toast.success(`Reply sent to ${c.request.authorName}. They can now accept or decline.`);
+      toast.success(`${tr("Reply sent to", lang)} ${c.request.authorName}. ${tr("They can now accept or decline.", lang)}`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not send that reply."));
     } finally {
@@ -169,7 +170,7 @@ function BuyerMatching() {
         message: `We are looking for ${commodity} and would like to buy from you directly.`,
         openThread: true,
       });
-      toast.success(`Connection request sent to ${f.name}.`);
+      toast.success(`${tr("Connection request sent to", lang)} ${f.name}.`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not send that request."));
     } finally {
@@ -195,7 +196,7 @@ function BuyerMatching() {
           {latest != null && (
             <View style={{ flexDirection: "row" }}>
               <Badge color={colors.buyer} bg={colors.buyerSoft}>
-                {`Delivery: ${latest.windowLabel} · ${latest.district}`}
+                {`${tr("Delivery:", lang)} ${latest.windowLabel} · ${latest.district}`}
               </Badge>
             </View>
           )}
@@ -204,7 +205,7 @@ function BuyerMatching() {
 
       {!needsCluster && fitsSingle.length > 0 && (
         <Card>
-          <CardHeader><CardTitle>{`Ranked FPO matches (${fitsSingle.length})`}</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{`${tr("Ranked FPO matches", lang)} (${fitsSingle.length})`}</CardTitle></CardHeader>
           <CardContent>
             {fitsSingle.slice(0, 4).map((c) => (
               <FpoCard key={c.request.id} c={c} busy={busyId === c.request.id}
@@ -225,8 +226,8 @@ function BuyerMatching() {
           <CardContent>
             <Text size="sm">
               {"A single FPO can't meet your "}
-              <Text size="sm" weight="700">{`${qtyNum} MT ${commodity}`}</Text>
-              {` order. We assembled a regional cluster of ${cluster.picked.length} FPOs:`}
+              <Text size="sm" weight="700">{`${qtyNum} MT ${tr(commodity, lang)}`}</Text>
+              {` ${tr("order. We assembled a regional cluster of", lang)} ${cluster.picked.length} ${tr("nearby FPOs:", lang)}`}
             </Text>
 
             <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
@@ -235,7 +236,7 @@ function BuyerMatching() {
                   <Text size="sm" weight="600">{c.request.authorName.split(" Farmer")[0]}</Text>
                   <Muted>{c.request.district}</Muted>
                   <Text size="xs" style={{ marginTop: 2 }}>
-                    {`${c.request.qty} MT · Grade ${c.request.grade}`}
+                    {`${c.request.qty} MT · ${tr("Grade", lang)} ${c.request.grade}`}
                   </Text>
                 </View>
               ))}
@@ -278,8 +279,8 @@ function BuyerMatching() {
             {farmerMatches.slice(0, 4).map((f) => (
               <View key={f.id} style={s.itemCard}>
                 <Text size="sm" weight="600">{f.name}</Text>
-                <Muted>{`${f.village}, ${f.district} · ${f.landAcres} ac`}</Muted>
-                <Text size="xs" style={{ marginTop: 2 }}>{`Crops: ${f.crops.join(", ")}`}</Text>
+                <Muted>{`${f.village}, ${f.district} · ${f.landAcres} ${tr("ac", lang)}`}</Muted>
+                <Text size="xs" style={{ marginTop: 2 }}>{`${tr("Crops", lang)}: ${f.crops.map((c) => tr(c, lang)).join(", ")}`}</Text>
                 <Button full size="sm" accent={colors.buyer} style={{ marginTop: spacing.sm }}
                   disabled={busyId != null} onPress={() => connectToFarmer(f)}>
                   Connect
@@ -303,7 +304,7 @@ function BuyerMatching() {
 }
 
 function SupplierMatching() {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const [latest, setLatest] = useState<RequestRow | null>(null);
   const [category, setCategory] = useState(INPUT_CATEGORIES[1]);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -337,7 +338,7 @@ function SupplierMatching() {
         offeredQty: r.qty,
         offeredUnit: r.unit,
       });
-      toast.success(`Quote sent to ${r.authorName}.`);
+      toast.success(`${tr("Quote sent to", lang)} ${r.authorName}.`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not send that quote."));
     } finally {
@@ -361,7 +362,7 @@ function SupplierMatching() {
           {latest != null && (
             <View style={{ flexDirection: "row" }}>
               <Badge color={colors.buyer} bg={colors.buyerSoft}>
-                {`Your posting: ${formatQuantity(latest.qty, latest.unit, latest.qtyLabel)} ${latest.item}`}
+                {`${tr("Your posting:", lang)} ${formatQuantity(latest.qty, latest.unit, latest.qtyLabel)} ${tr(latest.item, lang)}`}
               </Badge>
             </View>
           )}
@@ -372,7 +373,7 @@ function SupplierMatching() {
         <CardHeader>
           <View style={s.titleRow}>
             <Package size={16} color={colors.buyer} />
-            <CardTitle>{`FPOs needing your inputs (${needs.length})`}</CardTitle>
+            <CardTitle>{`${tr("FPOs needing your inputs", lang)} (${needs.length})`}</CardTitle>
           </View>
         </CardHeader>
         <CardContent>
@@ -388,7 +389,7 @@ function SupplierMatching() {
                 </View>
                 {r.pendingCount > 0 && (
                   <Badge color={colors.mutedForeground} bg={colors.muted}>
-                    {`${r.pendingCount} quoted`}
+                    {`${r.pendingCount} ${tr("quoted", lang)}`}
                   </Badge>
                 )}
               </View>
@@ -396,7 +397,7 @@ function SupplierMatching() {
                 {"Needs: "}<Text size="xs" weight="600">{r.item}</Text>
               </Muted>
               <Muted>
-                {`Qty: ${formatQuantity(r.qty, r.unit, r.qtyLabel)}${r.windowLabel !== "" ? ` · Window: ${r.windowLabel}` : ""}`}
+                {`${tr("Qty:", lang)} ${formatQuantity(r.qty, r.unit, r.qtyLabel)}${r.windowLabel !== "" ? ` · ${tr("Window", lang)}: ${r.windowLabel}` : ""}`}
               </Muted>
               <Button size="sm" accent={colors.buyer} style={{ marginTop: spacing.sm }}
                 disabled={busyId === r.id} onPress={() => quote(r)}>
@@ -411,6 +412,7 @@ function SupplierMatching() {
 }
 
 function FpoCard({ c, busy, onRespond }: { c: Candidate; busy: boolean; onRespond: () => void }) {
+  const { lang } = useApp();
   const { request, fpo, breakdown, rep } = c;
   const replied = request.responseCount > 0;
 
@@ -421,25 +423,25 @@ function FpoCard({ c, busy, onRespond }: { c: Candidate; busy: boolean; onRespon
           <Text size="sm" weight="700">{request.authorName}</Text>
           <Muted>{fpo?.tagline ?? request.district}</Muted>
         </View>
-        <Badge color={colors.buyerForeground} bg={colors.buyer}>{`${breakdown.score}% match`}</Badge>
+        <Badge color={colors.buyerForeground} bg={colors.buyer}>{`${breakdown.score}${tr("% match", lang)}`}</Badge>
       </View>
 
-      <Muted style={{ marginTop: 4 }}>{explainMatch(breakdown)}</Muted>
+      <Muted style={{ marginTop: 4 }}>{explainMatch(breakdown, lang)}</Muted>
 
       <View style={s.metaGrid}>
         <Meta icon={<Layers size={12} color={colors.mutedForeground} />}
-          label={`${request.qty} MT available · Grade ${request.grade}`} />
+          label={`${request.qty} MT ${tr("available", lang)} · ${tr("Grade", lang)} ${request.grade}`} />
         <Meta icon={<MapPin size={12} color={colors.mutedForeground} />}
           label={request.district} />
         {/* The rating is computed from reviews against delivered orders — the
             fpos.reputation column it used to read was seeded and never written. */}
         <Meta icon={<Star size={12} color={colors.mutedForeground} />}
           label={rep == null || rep.reviewCount === 0
-            ? "Not yet rated"
-            : `${rep.rating}★ (${rep.reviewCount} ${rep.reviewCount === 1 ? "review" : "reviews"})`} />
+            ? tr("Not yet rated", lang)
+            : `${rep.rating}★ (${rep.reviewCount} ${rep.reviewCount === 1 ? tr("review", lang) : tr("reviews", lang)})`} />
         {fpo != null && (
           <Meta icon={<Network size={12} color={colors.mutedForeground} />}
-            label={`${fpo.tier} · ${fpo.members} members`} />
+            label={`${fpo.tier} · ${fpo.members} ${tr("members", lang)}`} />
         )}
       </View>
 

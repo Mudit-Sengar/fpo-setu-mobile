@@ -1,22 +1,23 @@
 import React, { useEffect, useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import type { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
 import { ClipboardList, Database, Package, Plus } from "lucide-react-native";
 import { marketRepo, readinessRepo, requestRepo } from "../../db";
-import type { RequirementsUpdate } from "../../db/repositories/readinessRepository";
 import { describeWriteError } from "../../db/authz";
 import type { RequestRow, ResponseRow } from "../../db/repositories/requestRepository";
 import { formatQuantity, parseQuantity } from "../../lib/quantity";
 import { useDbQuery } from "../../db/useDbQuery";
 import type { Buyer, Supplier } from "../../db/types";
 import { useApp } from "../../lib/app-state";
+import { tr } from "../../lib/i18n";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import {
-  Accordion, Badge, Button, Card, CardContent, CardHeader, CardTitle,
-  Checkbox, Field, Input, Muted, Select, Text, Toggle, toast,
+  Badge, Button, Card, CardContent, CardHeader, CardTitle,
+  Field, Input, Muted, Select, Text, toast,
 } from "../../components/ui";
+import { BuyerReadinessForm } from "../../features/buyer-requirements-form";
 import { ModeToggle, Stepper, useBuyerMode } from "../../features/buyer-shared";
 import type { BuyerTabParamList } from "../../navigation/types";
 
@@ -42,7 +43,7 @@ export function BuyerHomeScreen() {
 function BuyerView() {
   // The buyer record linked to the signed-in account, not simply the first row —
   // a different buyer login (or an admin in the buyer view) loads its own profile.
-  const { profileId, session } = useApp();
+  const { profileId, session, lang } = useApp();
   const buyer = useDbQuery<Buyer | null>(
     () => (profileId == null ? Promise.resolve(null) : marketRepo.getBuyerById(profileId)),
     [profileId], null);
@@ -135,8 +136,12 @@ function BuyerView() {
           </CardContent>
         </Card>
       )}
-      {showProfile && (
-        <BuyerReadinessForm onSaved={() => nav.navigate("BuyerMatching")} />
+      {showProfile && profileId != null && (
+        <BuyerReadinessForm buyerId={profileId}
+          onSave={(input) => readinessRepo.saveBuyerRequirements(session, input)}
+          onSaved={() => nav.navigate("BuyerMatching")}
+          saveLabel="Save & Find Matching FPOs"
+          successMessage="Requirements saved. Showing matching FPOs…" />
       )}
 
       <Card>
@@ -158,7 +163,7 @@ function BuyerView() {
                 windowLabel: d.delivery,
                 district: d.location,
               });
-              toast.success(`Demand for ${d.qty_mt} MT ${d.commodity} posted. Matching FPOs…`);
+              toast.success(`${tr("Demand for", lang)} ${d.qty_mt} MT ${tr(d.commodity, lang)} ${tr("posted. Matching FPOs…", lang)}`);
               nav.navigate("BuyerMatching");
             } catch (e) {
               toast.error(describeWriteError(e, "Could not post that demand."));
@@ -188,7 +193,7 @@ function BuyerView() {
  * FPOs replied, and whether any are waiting on this buyer to decide.
  */
 function RequirementCard({ demand }: { demand: RequestRow }) {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const [open, setOpen] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const responses = useDbQuery<ResponseRow[]>(
@@ -202,7 +207,9 @@ function RequirementCard({ demand }: { demand: RequestRow }) {
     setBusyId(r.id);
     try {
       await requestRepo.decideResponse(session, r.id, decision);
-      toast.success(decision === "accepted" ? `Accepted ${r.responderName}.` : `Declined ${r.responderName}.`);
+      toast.success(decision === "accepted"
+        ? `${tr("Accepted", lang)} ${r.responderName}.`
+        : `${tr("Declined", lang)} ${r.responderName}.`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not record that decision."));
     } finally {
@@ -215,16 +222,16 @@ function RequirementCard({ demand }: { demand: RequestRow }) {
       <View style={s.requirementHead}>
         <View style={{ flex: 1 }}>
           <Text size="sm" weight="600">
-            {`${demand.qty} ${demand.unit} · ${demand.item}${demand.grade !== "" ? ` · Grade ${demand.grade}` : ""}`}
+            {`${demand.qty} ${demand.unit} · ${tr(demand.item, lang)}${demand.grade !== "" ? ` · ${tr("Grade", lang)} ${demand.grade}` : ""}`}
           </Text>
           <Muted>
-            {`Deliver to ${demand.district}${demand.windowLabel !== "" ? ` by ${demand.windowLabel}` : ""}`}
+            {`${tr("Deliver to", lang)} ${demand.district}${demand.windowLabel !== "" ? ` ${tr("by", lang)} ${demand.windowLabel}` : ""}`}
           </Muted>
         </View>
         {demand.pendingCount > 0 ? (
-          <Badge color={colors.buyerForeground} bg={colors.buyer}>{`${demand.pendingCount} to review`}</Badge>
+          <Badge color={colors.buyerForeground} bg={colors.buyer}>{`${demand.pendingCount} ${tr("to review", lang)}`}</Badge>
         ) : demand.responseCount > 0 ? (
-          <Badge color={colors.mutedForeground} bg={colors.muted}>{`${demand.responseCount} replied`}</Badge>
+          <Badge color={colors.mutedForeground} bg={colors.muted}>{`${demand.responseCount} ${tr("replied", lang)}`}</Badge>
         ) : (
           <Badge color={colors.mutedForeground} bg={colors.muted}>No replies yet</Badge>
         )}
@@ -234,7 +241,7 @@ function RequirementCard({ demand }: { demand: RequestRow }) {
         <Button variant="ghost" size="sm" accent={colors.buyer}
           style={{ alignSelf: "flex-start", paddingHorizontal: 0 }}
           onPress={() => setOpen((v) => !v)}>
-          {open ? "Hide replies" : `View ${demand.responseCount} ${demand.responseCount === 1 ? "reply" : "replies"}`}
+          {open ? "Hide replies" : `${tr("View", lang)} ${demand.responseCount} ${demand.responseCount === 1 ? tr("reply", lang) : tr("replies", lang)}`}
         </Button>
       )}
 
@@ -243,7 +250,7 @@ function RequirementCard({ demand }: { demand: RequestRow }) {
           <View style={s.requirementHead}>
             <View style={{ flex: 1 }}>
               <Text size="sm" weight="700">{r.responderName}</Text>
-              {r.offeredQty != null && <Muted>{`Offers ${r.offeredQty} MT`}</Muted>}
+              {r.offeredQty != null && <Muted>{`${tr("Offers", lang)} ${r.offeredQty} MT`}</Muted>}
             </View>
             {r.status === "pending"
               ? <Badge color={colors.buyerForeground} bg={colors.buyer}>Pending</Badge>
@@ -270,203 +277,13 @@ function RequirementCard({ demand }: { demand: RequestRow }) {
   );
 }
 
-/* ============== Buyer Readiness & Market Qualification ============== */
-
-const COMMODITIES = ["Wheat", "Rice", "Maize", "Soybean", "Onion", "Tomato", "Turmeric", "Cotton", "Sugarcane", "Pulses", "Other"];
-const SEASONS = ["Kharif", "Rabi", "Zaid", "Year-round"];
-const STATES = ["Maharashtra", "MP", "Gujarat", "Karnataka", "UP", "Punjab", "Haryana", "Rajasthan", "AP", "Telangana", "TN", "WB"];
-const CERTS = ["Organic", "Global GAP", "FSSAI", "ISO", "APEDA"];
-const INFRA = ["Warehouse", "Cleaning Unit", "Sorting Line", "Grading Machine", "Digital Record Keeping", "Cold Storage", "Testing Facility"];
-const COMPLIANCE = ["GST Registration", "FSSAI License", "Producer Company Registration", "Audited Financial Statements", "PAN", "Bank Account", "Insurance"];
-const GRADING = ["FAQ", "Grade A", "Grade B", "Custom"];
-
-/**
- * Buyer Readiness & Market Qualification.
- *
- * Around thirty fields, every one of which used to live in `useState` inside a
- * throwaway sub-component — `TextField`, `MultiSelect`, `ToggleRow` each held
- * their own value and the parent never read any of them, so "Save & Find
- * Matching FPOs" navigated and discarded the lot. This is the richest matching
- * signal in the app, and none of it survived the tap.
- *
- * The state is lifted into one object here and saved to `buyer_requirements` and
- * its child tables, which is what lets the matching screen rank FPOs on what this
- * buyer actually asked for.
- */
-function BuyerReadinessForm({ onSaved }: { onSaved: () => void }) {
-  const { profileId, session } = useApp();
-  const saved = useDbQuery<RequirementsUpdate | null>(
-    () => (profileId == null ? Promise.resolve(null) : readinessRepo.getBuyerRequirements(profileId)),
-    [profileId], null);
-
-  const [form, setForm] = useState<RequirementsUpdate | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  // Populated when the saved requirements arrive, so reopening the form shows
-  // what was last stated rather than an empty sheet.
-  useEffect(() => {
-    if (saved != null && form == null) setForm(saved);
-  }, [saved, form]);
-
-  if (form == null) {
-    return (
-      <Card><CardContent style={{ paddingTop: spacing.lg }}>
-        <Muted>Loading your requirements…</Muted>
-      </CardContent></Card>
-    );
-  }
-
-  const set = <K extends keyof RequirementsUpdate>(key: K, value: RequirementsUpdate[K]) =>
-    setForm((f) => (f == null ? f : { ...f, [key]: value }));
-
-  const toggleIn = (key: "commodities" | "states" | "seasons" | "certifications" | "infrastructure" | "compliance", value: string) =>
-    setForm((f) => {
-      if (f == null) return f;
-      const list = f[key];
-      return { ...f, [key]: list.includes(value) ? list.filter((x) => x !== value) : [...list, value] };
-    });
-
-  async function save() {
-    if (form == null || busy) return;
-    setBusy(true);
-    try {
-      await readinessRepo.saveBuyerRequirements(session, form);
-      toast.success("Requirements saved. Showing matching FPOs…");
-      onSaved();
-    } catch (e) {
-      toast.error(describeWriteError(e, "Could not save your requirements."));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Buyer Readiness & Market Qualification</CardTitle>
-        <Muted>The more you share, the better we can match you with the right FPO. All fields are optional.</Muted>
-      </CardHeader>
-      <CardContent>
-        <Accordion title="🛒 Procurement Requirements">
-          <ChipMulti label="Commodity" options={COMMODITIES}
-            selected={form.commodities} onToggle={(v) => toggleIn("commodities", v)} />
-          <Field label="Quantity">
-            <Input value={form.quantity == null ? "" : String(form.quantity)} keyboardType="numeric"
-              placeholder="e.g. 500"
-              onChangeText={(t) => set("quantity", t === "" ? null : Number(t) || null)} />
-          </Field>
-          <Field label="Unit">
-            <Select value={form.unit} options={["MT", "Quintal", "Kg"]} onChange={(v) => set("unit", v)} />
-          </Field>
-          <ChipMulti label="Geography (states / regions)" options={STATES}
-            selected={form.states} onToggle={(v) => toggleIn("states", v)} />
-          <ChipMulti label="Seasonality" options={SEASONS}
-            selected={form.seasons} onToggle={(v) => toggleIn("seasons", v)} />
-        </Accordion>
-
-        <Accordion title="✅ Quality Requirements">
-          <Field label="Moisture % (max)">
-            <Input value={form.moistureMax == null ? "" : String(form.moistureMax)} keyboardType="numeric"
-              placeholder="Max 14"
-              onChangeText={(t) => set("moistureMax", t === "" ? null : Number(t) || null)} />
-          </Field>
-          <Field label="Foreign Matter % (max)">
-            <Input value={form.foreignMatterMax == null ? "" : String(form.foreignMatterMax)} keyboardType="numeric"
-              placeholder="Max 1"
-              onChangeText={(t) => set("foreignMatterMax", t === "" ? null : Number(t) || null)} />
-          </Field>
-          <Field label="Grading Standards">
-            <Select value={form.gradingStandard === "" ? GRADING[0] : form.gradingStandard}
-              options={GRADING} onChange={(v) => set("gradingStandard", v)} />
-          </Field>
-          <Field label="Packaging Standards">
-            <Input value={form.packagingStandard} multiline numberOfLines={2}
-              placeholder="Describe packaging requirements…"
-              onChangeText={(t) => set("packagingStandard", t)} />
-          </Field>
-          <View style={s.toggleBox}>
-            <Toggle checked={form.traceabilityRequired} accent={colors.buyer}
-              label="Traceability Requirements"
-              onChange={(v) => set("traceabilityRequired", v)} />
-            {form.traceabilityRequired && (
-              <Input value={form.traceabilityNote} placeholder="Describe traceability needs"
-                onChangeText={(t) => set("traceabilityNote", t)} />
-            )}
-          </View>
-          <Field label="Residue Limits">
-            <Input value={form.residueLimits} multiline numberOfLines={2}
-              placeholder="e.g. pesticide residue thresholds (ppm)…"
-              onChangeText={(t) => set("residueLimits", t)} />
-          </Field>
-          <Field label="Certifications Required">
-            {CERTS.map((c) => (
-              <Checkbox key={c} checked={form.certifications.includes(c)} accent={colors.buyer} label={c}
-                onChange={() => toggleIn("certifications", c)} />
-            ))}
-          </Field>
-        </Accordion>
-
-        <Accordion title="🏭 Infrastructure Requirements">
-          <Field label="Storage Capacity Required (MT)">
-            <Input value={form.storageCapacityRequiredMt == null ? "" : String(form.storageCapacityRequiredMt)}
-              keyboardType="numeric" placeholder="e.g. 500"
-              onChangeText={(t) => set("storageCapacityRequiredMt", t === "" ? null : Number(t) || null)} />
-          </Field>
-          {INFRA.map((item) => (
-            <View key={item} style={s.toggleBox}>
-              <Toggle checked={form.infrastructure.includes(item)} accent={colors.buyer} label={item}
-                onChange={() => toggleIn("infrastructure", item)} />
-            </View>
-          ))}
-        </Accordion>
-
-        <Accordion title="📋 Compliance Requirements">
-          {COMPLIANCE.map((item) => (
-            <View key={item} style={s.toggleBox}>
-              <Toggle checked={form.compliance.includes(item)} accent={colors.buyer} label={item}
-                onChange={() => toggleIn("compliance", item)} />
-            </View>
-          ))}
-        </Accordion>
-
-        <Button accent={colors.buyer} style={{ alignSelf: "flex-end", marginTop: spacing.md }}
-          disabled={busy} onPress={save}>
-          {busy ? "Saving…" : "Save & Find Matching FPOs"}
-        </Button>
-      </CardContent>
-    </Card>
-  );
-}
-
-/** A row of selectable chips backed by the caller's state, not its own. */
-function ChipMulti({
-  label, options, selected, onToggle,
-}: { label: string; options: string[]; selected: string[]; onToggle: (v: string) => void }) {
-  return (
-    <Field label={label}>
-      <View style={s.multiRow}>
-        {options.map((o) => {
-          const on = selected.includes(o);
-          return (
-            <Pressable key={o} onPress={() => onToggle(o)}
-              accessibilityRole="checkbox" accessibilityState={{ checked: on }}
-              style={[s.multiChip, on && { backgroundColor: colors.buyer, borderColor: colors.buyer }]}>
-              <Text size="xs" color={on ? colors.buyerForeground : colors.foreground}>{o}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-    </Field>
-  );
-}
-
 /* ============== Supplier side ============== */
 
 function SupplierView() {
   // The supplier record linked to the signed-in account. This was `suppliers[0]`
   // — whoever opened the Supplier view edited "Mahabeej Seeds Ltd" regardless of
   // who they were, because supplier was a UI toggle rather than a role.
-  const { profileId, session } = useApp();
+  const { profileId, session, lang } = useApp();
   const sup = useDbQuery<Supplier | null>(
     () => (profileId == null ? Promise.resolve(null) : marketRepo.getSupplierById(profileId)),
     [profileId], null);
@@ -584,7 +401,7 @@ function SupplierView() {
                 district: p.region,
                 priceUnit: p.pricePerUnit,
               });
-              toast.success(`Supply for ${p.qty} ${p.item} posted. Matching FPOs/farmers…`);
+              toast.success(`${tr("Supply for", lang)} ${p.qty} ${p.item} ${tr("posted. Matching FPOs/farmers…", lang)}`);
               nav.navigate("BuyerMatching");
             } catch (e) {
               toast.error(describeWriteError(e, "Could not post that supply."));
@@ -601,14 +418,14 @@ function SupplierView() {
               <View key={p.id} style={s.postingRow}>
                 <View style={{ flex: 1 }}>
                   <Text size="sm" weight="600">
-                    {`${formatQuantity(p.qty, p.unit, p.qtyLabel)} · ${p.item} · ${p.category}`}
+                    {`${formatQuantity(p.qty, p.unit, p.qtyLabel)} · ${tr(p.item, lang)} · ${tr(p.category, lang)}`}
                   </Text>
-                  <Muted>{`${p.district} · ${p.windowLabel}`}</Muted>
+                  <Muted>{`${p.district} · ${tr(p.windowLabel, lang)}`}</Muted>
                 </View>
                 {p.pendingCount > 0 ? (
-                  <Badge color={colors.buyerForeground} bg={colors.buyer}>{`${p.pendingCount} to review`}</Badge>
+                  <Badge color={colors.buyerForeground} bg={colors.buyer}>{`${p.pendingCount} ${tr("to review", lang)}`}</Badge>
                 ) : p.responseCount > 0 ? (
-                  <Badge color={colors.mutedForeground} bg={colors.muted}>{`${p.responseCount} replied`}</Badge>
+                  <Badge color={colors.mutedForeground} bg={colors.muted}>{`${p.responseCount} ${tr("replied", lang)}`}</Badge>
                 ) : (
                   <Badge color={colors.mutedForeground} bg={colors.muted}>No replies yet</Badge>
                 )}
@@ -700,15 +517,5 @@ const s = StyleSheet.create({
   replyRow: {
     borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm,
     backgroundColor: colors.mutedBg, padding: spacing.md, marginTop: spacing.sm,
-  },
-  multiRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
-  multiChip: {
-    borderWidth: 1, borderColor: colors.border, borderRadius: radius.full,
-    paddingHorizontal: 12, paddingVertical: 6, backgroundColor: colors.background,
-  },
-  toggleBox: {
-    borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm,
-    paddingHorizontal: spacing.md, paddingVertical: 4, marginBottom: 6,
-    backgroundColor: colors.background,
   },
 });

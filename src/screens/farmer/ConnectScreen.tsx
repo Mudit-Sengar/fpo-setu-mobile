@@ -10,6 +10,7 @@ import type { PeerFarmer } from "../../db/repositories/farmerRepository";
 import type { RequestRow } from "../../db/repositories/requestRepository";
 import { useDbQuery } from "../../db/useDbQuery";
 import { useApp } from "../../lib/app-state";
+import { tr } from "../../lib/i18n";
 import { explainMatch, matchScore } from "../../lib/matching";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
@@ -68,7 +69,7 @@ export function ConnectScreen() {
  * the posting or ask to connect.
  */
 function ConnectBuyers() {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const me = useSessionFarmer();
   const crops = me?.crops ?? [];
 
@@ -94,7 +95,7 @@ function ConnectBuyers() {
     try {
       await requestRepo.respond(session, d.id, { message: msg.trim() === "" ? null : msg.trim() });
       setMsgFor(null);
-      toast.success(`Reply sent to ${d.authorName}.`);
+      toast.success(`${tr("Reply sent to", lang)} ${d.authorName}.`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not send that reply."));
     } finally {
@@ -109,11 +110,11 @@ function ConnectBuyers() {
       await networkRepo.requestConnection(session, {
         otherPartyId: d.authorPartyId,
         relationType: "trade",
-        message: `Namaste, I grow ${d.item} and would like to discuss supplying you.`,
+        message: `${tr("Namaste, I grow", lang)} ${d.item} ${tr("and would like to discuss supplying you.", lang)}`,
         originRequestId: d.id,
         openThread: true,
       });
-      toast.success(`Connection request sent to ${d.authorName}.`);
+      toast.success(`${tr("Connection request sent to", lang)} ${d.authorName}.`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not send that request."));
     } finally {
@@ -148,7 +149,7 @@ function ConnectBuyers() {
                   <Muted>{b.district}</Muted>
                 </View>
               </View>
-              <Badge color="#ffffff" bg={colors.farmer}>Open</Badge>
+              <Badge color="#ffffff" bg={colors.farmer}>Still open</Badge>
             </View>
 
             <View style={s.pillRow}>
@@ -205,7 +206,7 @@ function ConnectBuyers() {
  * every message with the same canned line after a 600ms timer.
  */
 function ConnectFarmers() {
-  const { session } = useApp();
+  const { session, lang } = useApp();
   const me = useSessionFarmer();
   const [crop, setCrop] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -230,10 +231,10 @@ function ConnectFarmers() {
       await networkRepo.requestConnection(session, {
         otherPartyId: f.partyId,
         relationType: "peer",
-        message: `Namaste ${f.name.split(" ")[0]}, I also grow ${crop}. Shall we pool our harvest?`,
+        message: `${tr("Namaste", lang)} ${f.name.split(" ")[0]}, ${tr("I also grow", lang)} ${crop}. ${tr("Shall we pool our harvest?", lang)}`,
         openThread: true,
       });
-      toast.success(`Request sent to ${f.name}. You can talk once they accept.`);
+      toast.success(`${tr("Request sent to", lang)} ${f.name}. ${tr("You can talk once they accept.", lang)}`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not send that request."));
     } finally {
@@ -286,13 +287,13 @@ function ConnectFarmers() {
                     <Muted>{`${f.village}, ${f.district}`}</Muted>
                   </View>
                 </View>
-                <Badge color={colors.farmer} bg={colors.farmerSoft}>{`${f.landAcres} ac`}</Badge>
+                <Badge color={colors.farmer} bg={colors.farmerSoft}>{`${f.landAcres} ${tr("ac", lang)}`}</Badge>
               </View>
 
               <View style={s.pillRow}>
-                <Pill k="Crops" v={f.crops.join(", ")} />
+                <Pill k="Crops" v={f.crops.map((c) => tr(c, lang)).join(", ")} />
               </View>
-              <Muted style={{ marginTop: spacing.sm }}>{explainMatch(breakdown)}</Muted>
+              <Muted style={{ marginTop: spacing.sm }}>{explainMatch(breakdown, lang)}</Muted>
 
               <Button full size="sm" accent={colors.farmer} style={{ marginTop: spacing.sm }}
                 disabled={busyId === f.id}
