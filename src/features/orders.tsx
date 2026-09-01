@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { StyleSheet, View } from "react-native";
+import React, { useMemo, useState } from "react";
+import { ScrollView, StyleSheet, View } from "react-native";
 import { Package, Receipt } from "lucide-react-native";
 import { orderRepo } from "../db";
 import { describeWriteError } from "../db/authz";
@@ -9,6 +9,7 @@ import { useApp } from "../lib/app-state";
 import { tr } from "../lib/i18n";
 import { colors, radius, spacing } from "../theme";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Muted, Text, toast } from "../components/ui";
+import { Segmented } from "../components/common";
 
 /**
  * Orders, shared by every persona.
@@ -48,10 +49,13 @@ function actionsFor(o: OrderRow): { to: OrderStatus; label: string }[] {
   }
 }
 
+type SettledFilter = "all" | "paid" | "cancelled";
+
 export function OrdersPanel({ accent }: { accent: string }) {
   const { session, lang } = useApp();
   const orders = useDbQuery<OrderRow[]>(() => orderRepo.listMyOrders(session), [session?.partyId], []);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [settledFilter, setSettledFilter] = useState<SettledFilter>("all");
 
   async function advance(o: OrderRow, to: OrderStatus, label: string) {
     if (busyId != null) return;
@@ -68,6 +72,10 @@ export function OrdersPanel({ accent }: { accent: string }) {
 
   const open = orders.filter((o) => !["paid", "cancelled"].includes(o.status));
   const settled = orders.filter((o) => ["paid", "cancelled"].includes(o.status));
+  const settledFiltered = useMemo(
+    () => (settledFilter === "all" ? settled : settled.filter((o) => o.status === settledFilter)),
+    [settled, settledFilter],
+  );
 
   return (
     <>
@@ -129,21 +137,37 @@ export function OrdersPanel({ accent }: { accent: string }) {
           <CardHeader>
             <View style={s.titleRow}>
               <Receipt size={16} color={accent} />
-              <CardTitle>Completed</CardTitle>
+              <CardTitle>{`${tr("Completed", lang)} (${settledFiltered.length})`}</CardTitle>
+            </View>
+            <View style={{ marginTop: spacing.sm }}>
+              <Segmented
+                options={["all", "paid", "cancelled"] as const}
+                value={settledFilter}
+                onChange={setSettledFilter}
+                accent={accent}
+                labelOf={(v) => (v === "all" ? "All" : v === "paid" ? "Paid" : "Cancelled")}
+              />
             </View>
           </CardHeader>
           <CardContent>
-            {settled.map((o) => (
-              <View key={o.id} style={s.rowBetween}>
-                <View style={{ flex: 1 }}>
-                  <Text size="sm">{`${o.qty} ${o.unit} ${o.commodity} · ${o.counterpartyName}`}</Text>
-                  <Muted noTranslate>{o.orderNo}</Muted>
+            {settledFiltered.length === 0 && <Muted>No completed orders match this filter.</Muted>}
+            {/* Capped to roughly 2-3 rows of visible height — the rest scrolls
+                instead of pushing the rest of the Inbox down as orders pile up. */}
+            <ScrollView style={s.settledScroll} nestedScrollEnabled>
+              {settledFiltered.map((o) => (
+                <View key={o.id} style={s.settledCard}>
+                  <View style={s.rowBetween}>
+                    <View style={{ flex: 1 }}>
+                      <Text size="sm" numberOfLines={1}>{`${o.qty} ${o.unit} ${o.commodity} · ${o.counterpartyName}`}</Text>
+                      <Muted noTranslate>{o.orderNo}</Muted>
+                    </View>
+                    <Badge color={STATUS_STYLE[o.status].fg} bg={STATUS_STYLE[o.status].bg}>
+                      {STATUS_STYLE[o.status].label}
+                    </Badge>
+                  </View>
                 </View>
-                <Badge color={STATUS_STYLE[o.status].fg} bg={STATUS_STYLE[o.status].bg}>
-                  {STATUS_STYLE[o.status].label}
-                </Badge>
-              </View>
-            ))}
+              ))}
+            </ScrollView>
           </CardContent>
         </Card>
       )}
@@ -159,4 +183,11 @@ const s = StyleSheet.create({
     backgroundColor: colors.card, padding: spacing.md, marginBottom: spacing.sm,
   },
   actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.md, flexWrap: "wrap", alignItems: "center" },
+  // ~2-3 rows visible at once (each settledCard is ~64pt tall) — the rest is
+  // reached by scrolling inside this box rather than growing the Inbox screen.
+  settledScroll: { maxHeight: 200 },
+  settledCard: {
+    borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm,
+    backgroundColor: colors.card, padding: spacing.sm, marginBottom: 6,
+  },
 });

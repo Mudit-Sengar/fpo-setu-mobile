@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Modal, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MessageCircle, Mic, MicOff, Send, Volume2, X } from "lucide-react-native";
 import { useApp, type Role } from "../lib/app-state";
 import { tr } from "../lib/i18n";
 import { useSpeech } from "../hooks/useSpeech";
+import { useVoiceInput } from "../hooks/useVoiceInput";
 import { accentColors, colors, radius, spacing, type Accent } from "../theme";
-import { Input, Text } from "./ui";
+import { Input, Text, toast } from "./ui";
 
 /**
  * `text` is a list of segments rather than one pre-joined string. Each static
@@ -42,12 +43,28 @@ export function AssistantWidget({
   accent?: Accent;
 }) {
   const { role, lang } = useApp();
-  const { speak, startListening, listening } = useSpeech();
+  const { speak } = useSpeech();
   const insets = useSafeAreaInsets();
   const accentColor = accent ? accentColors[accent].base : colors.primary;
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const scrollRef = useRef<ScrollView | null>(null);
+
+  // Shares the same native speech-to-text pipeline as Krishi Bandhu (Farmer
+  // Home) — see src/hooks/useVoiceInput.ts — instead of the useSpeech stub,
+  // which never implemented startListening. Recognised text is dropped into
+  // the composer's input, not auto-sent, so the user can review/edit it first.
+  const voice = useVoiceInput((transcript) => setInput(transcript));
+  const listening = voice.status === "listening";
+  const processing = voice.status === "processing";
+
+  useEffect(() => {
+    if (voice.error != null) {
+      toast.message(voice.error);
+      voice.clearError();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once per new error, not on every voice object identity change
+  }, [voice.error]);
   const [msgs, setMsgs] = useState<Msg[]>([{
     role: "bot",
     text: role
@@ -198,16 +215,30 @@ export function AssistantWidget({
 
             <View style={s.composer}>
               <Pressable
-                onPress={startListening}
-                style={[s.iconBtn, listening && { backgroundColor: accentColor, borderColor: accentColor }]}
-                accessibilityLabel={tr("Voice input", lang)}
+                onPress={listening ? voice.stop : voice.start}
+                disabled={processing}
+                accessibilityRole="button"
+                accessibilityLabel={tr(listening ? "Stop listening" : "Voice input", lang)}
+                accessibilityState={{ busy: listening || processing }}
+                style={[
+                  s.iconBtn,
+                  listening && { backgroundColor: accentColor, borderColor: accentColor },
+                  processing && { opacity: 0.5 },
+                ]}
               >
-                {listening
-                  ? <MicOff size={16} color="#ffffff" />
-                  : <Mic size={16} color={accentColor} />}
+                {processing
+                  ? <ActivityIndicator size="small" color={accentColor} />
+                  : listening
+                    ? <MicOff size={16} color="#ffffff" />
+                    : <Mic size={16} color={accentColor} />}
               </Pressable>
               <View style={{ flex: 1 }}>
-                <Input value={input} onChangeText={setInput} placeholder="Ask me anything about the app" />
+                <Input
+                  value={listening && voice.partial.length > 0 ? voice.partial : input}
+                  onChangeText={setInput}
+                  editable={!listening}
+                  placeholder={listening ? "Listening…" : "Ask me anything about the app"}
+                />
               </View>
               <Pressable
                 onPress={() => send()}

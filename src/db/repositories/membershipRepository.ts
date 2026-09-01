@@ -167,13 +167,13 @@ export async function apply(
   const farmerId = requireProfile(ctx, "farmer");
 
   return withWrite("applyForMembership", async (db) => {
-    const active = (await db.execute(
-      "SELECT fpo_id FROM memberships WHERE farmer_id = ? AND status = 'active';",
-      [farmerId])).rows ?? [];
-    if (active.length > 0) {
-      throw new AuthzError(String(active[0].fpo_id) === input.fpoId
-        ? "You are already a member of this FPO."
-        : "Leave your current FPO before applying to another.");
+    // A farmer may belong to several FPOs at once (different crops, different
+    // seasons) — only a duplicate application to the *same* FPO is blocked.
+    const already = (await db.execute(
+      "SELECT id FROM memberships WHERE farmer_id = ? AND fpo_id = ? AND status = 'active';",
+      [farmerId, input.fpoId])).rows ?? [];
+    if (already.length > 0) {
+      throw new AuthzError("You are already a member of this FPO.");
     }
 
     const pending = (await db.execute(
@@ -246,17 +246,6 @@ export async function decide(
     }
     const farmerId = String(rows[0].farmer_id);
 
-    if (decision === "active") {
-      // The partial unique index would reject this anyway; failing here gives the
-      // FPO a sentence rather than a constraint error.
-      const elsewhere = (await db.execute(
-        "SELECT 1 AS ok FROM memberships WHERE farmer_id = ? AND status = 'active';",
-        [farmerId])).rows ?? [];
-      if (elsewhere.length > 0) {
-        throw new AuthzError("That farmer has since joined another FPO.");
-      }
-    }
-
     await db.execute(
       `UPDATE memberships
           SET status = ?, share_pct = ?, decided_at = datetime('now'),
@@ -311,6 +300,80 @@ export async function leave(ctx: SessionContext | null, membershipId: number): P
         body: null,
       });
     }
+  });
+}
+
+/** The FPO's side: removes an active member, preserving the history. */
+export async function removeMember(ctx: SessionContext | null, membershipId: number): Promise<void> {
+  const fpoId = requireProfile(ctx, "fpo");
+
+  await withWrite("removeMember", async (db) => {
+    const rows = (await db.execute(
+      "SELECT farmer_id, fpo_id, status FROM memberships WHERE id = ?;", [membershipId])).rows ?? [];
+    if (rows.length === 0) throw new AuthzError("That membership no longer exists.");
+    if (String(rows[0].fpo_id) !== fpoId) {
+      throw new AuthzError("That member belongs to another FPO.");
+    }
+    if (String(rows[0].status) !== "active") {
+      throw new AuthzError("That farmer is not an active member.");
+    }
+
+    await db.execute(
+      "UPDATE memberships SET status = 'exited', exited_at = datetime('now') WHERE id = ?;",
+      [membershipId]);
+
+    const farmerParty = await partyIdFor("farmer", String(rows[0].farmer_id));
+    if (farmerParty != null) {
+      await notifyParty(db, {
+        recipient: farmerParty,
+        actor: ctx!.partyId,
+        type: "membership_exited",
+        title: "Your FPO membership was ended",
+        body: null,
+      });
+    }
+    await record(db, ctx, {
+      action: "membership_removed", entityType: "membership", entityId: membershipId,
+      fromStatus: "active", toStatus: "exited",
+    });
+  });
+}
+
+/** Upcoming/past meetings this farmer was invited to, newest first. */
+export interface MyMeetingInvitation {
+  meetingId: number;
+  fpoId: string;
+  fpoName: string;
+  date: string;
+  time: string;
+  agenda: string;
+  venue: string;
+  response: string;
+}
+
+export async function listMyMeetingInvitations(farmerId: string | null): Promise<MyMeetingInvitation[]> {
+  if (farmerId == null) return [];
+  return withDb("listMyMeetingInvitations", async (db) => {
+    const rows = (await db.execute(
+      `SELECT mt.id AS meeting_id, mt.fpo_id, o.name AS fpo_name, mt.date, mt.time, mt.agenda, mt.venue,
+              mi.response
+         FROM meeting_invitations mi
+         JOIN memberships m  ON m.id = mi.membership_id
+         JOIN fpo_meetings mt ON mt.id = mi.meeting_id
+         JOIN fpos o          ON o.id = mt.fpo_id
+        WHERE m.farmer_id = ?
+        ORDER BY mt.date DESC, mt.id DESC;`,
+      [farmerId])).rows ?? [];
+    return rows.map((r) => ({
+      meetingId: Number(r.meeting_id),
+      fpoId: String(r.fpo_id),
+      fpoName: String(r.fpo_name ?? ""),
+      date: String(r.date ?? ""),
+      time: String(r.time ?? ""),
+      agenda: String(r.agenda ?? ""),
+      venue: String(r.venue ?? ""),
+      response: String(r.response ?? "invited"),
+    }));
   });
 }
 

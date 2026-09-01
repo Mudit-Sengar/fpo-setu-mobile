@@ -1,4 +1,5 @@
-import { withDb } from "../connection";
+import { withDb, withWrite } from "../connection";
+import { AuthzError, requireProfile, type SessionContext } from "../authz";
 import type { Farmer, FarmerTxn } from "../types";
 
 /** Farmers, their transactions, and the farmer-side match/discovery lists. */
@@ -85,6 +86,93 @@ export async function getFarmerProfileExtras(id: string): Promise<FarmerProfileE
   });
 }
 
+
+/** The farmer id (farmers.id) behind a party row, or null if it isn't a farmer. */
+export async function getFarmerIdForParty(partyId: number): Promise<string | null> {
+  return withDb("getFarmerIdForParty", async (db) => {
+    const rows = (await db.execute(
+      "SELECT entity_id FROM parties WHERE id = ? AND kind = 'farmer';", [partyId])).rows ?? [];
+    return rows.length === 0 ? null : String(rows[0].entity_id);
+  });
+}
+
+export interface NewFarmerTxn {
+  date: string;
+  crop: string;
+  qtyQ: number;
+  price: number;
+  amount: number;
+  /** The `ledger_entries` row this transaction was posted alongside, if any — see migration 014. */
+  ledgerEntryId?: number | null;
+}
+
+/**
+ * Records a produce transaction directly against a farmer.
+ *
+ * Order-settled transactions already reach `farmer_txns` via
+ * `orderRepository.postAccounting`; this is the same insert for the FPO's
+ * manual bookkeeping path (`AddEntry`), so a ledger entry against a member
+ * shows up on that farmer's own "My FPO" transaction history too. Linking it to
+ * the ledger entry that caused it (rather than leaving two independent inserts
+ * that merely agree) is what lets deleting that ledger entry take this row with
+ * it — see `fpoRepository.deleteLedgerEntry`.
+ */
+export async function recordFarmerTransaction(
+  farmerId: string, fpoId: string, t: NewFarmerTxn,
+): Promise<void> {
+  await withWrite("recordFarmerTransaction", async (db) => {
+    const membership = (await db.execute(
+      "SELECT id FROM memberships WHERE farmer_id = ? AND fpo_id = ? AND status = 'active' LIMIT 1;",
+      [farmerId, fpoId])).rows ?? [];
+
+    await db.execute(
+      `INSERT INTO farmer_txns (farmer_id, date, crop, qty_q, price, amount, membership_id, ledger_entry_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+      [farmerId, t.date, t.crop, t.qtyQ, t.price, t.amount,
+        membership.length > 0 ? Number(membership[0].id) : null, t.ledgerEntryId ?? null]);
+  });
+}
+
+export interface MemberProfileEdit {
+  village?: string | null;
+  landAcres?: number | null;
+  crops?: string[] | null;
+}
+
+/**
+ * FPO-side edit of a member's profile fields (village, landholding, crops).
+ *
+ * Same fields and replace-semantics `membershipRepository.apply()` already
+ * updates when a farmer corrects their own details on the application form —
+ * only the authorization direction is reversed: the FPO may edit any farmer
+ * who is currently an active member of it.
+ */
+export async function updateMemberProfile(
+  ctx: SessionContext | null, farmerId: string, edit: MemberProfileEdit,
+): Promise<void> {
+  const fpoId = requireProfile(ctx, "fpo");
+
+  await withWrite("updateMemberProfile", async (db) => {
+    const owns = (await db.execute(
+      "SELECT 1 AS ok FROM memberships WHERE farmer_id = ? AND fpo_id = ? AND status = 'active';",
+      [farmerId, fpoId])).rows ?? [];
+    if (owns.length === 0) throw new AuthzError("That farmer is not an active member of your FPO.");
+
+    if (edit.village != null && edit.village !== "") {
+      await db.execute("UPDATE farmers SET village = ? WHERE id = ?;", [edit.village, farmerId]);
+    }
+    if (edit.landAcres != null && edit.landAcres > 0) {
+      await db.execute("UPDATE farmers SET land_acres = ? WHERE id = ?;", [edit.landAcres, farmerId]);
+    }
+    if (edit.crops != null && edit.crops.length > 0) {
+      await db.execute("DELETE FROM farmer_crops WHERE farmer_id = ?;", [farmerId]);
+      for (const crop of edit.crops) {
+        await db.execute(
+          "INSERT OR IGNORE INTO farmer_crops (farmer_id, crop) VALUES (?, ?);", [farmerId, crop]);
+      }
+    }
+  });
+}
 
 /** A farmer growing the same crop, with the party id needed to connect to them. */
 export interface PeerFarmer {

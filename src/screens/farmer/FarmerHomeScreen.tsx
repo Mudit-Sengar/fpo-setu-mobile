@@ -13,8 +13,11 @@ import {
 } from "../../lib/farmer-intents";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
-import { Badge, Input, Muted, Text, toast } from "../../components/ui";
-import { useUnreadCount } from "../../features/connections";
+import { Input, Muted, Text, toast } from "../../components/ui";
+import { networkRepo } from "../../db";
+import type { NotificationRow } from "../../db/repositories/networkRepository";
+import { useNotifications } from "../../features/connections";
+import { resolveNotificationTarget } from "../../features/notificationTargets";
 import { Tile } from "../../components/common";
 import { useVoiceInput } from "../../hooks/useVoiceInput";
 import type { FarmerTabParamList } from "../../navigation/types";
@@ -29,10 +32,16 @@ import type { FarmerTabParamList } from "../../navigation/types";
  */
 export function FarmerHomeScreen() {
   const nav = useNavigation<BottomTabNavigationProp<FarmerTabParamList>>();
-  const { lang } = useApp();
+  const { session, lang } = useApp();
   const farmer = useSessionFarmer();
-  const unread = useUnreadCount();
+  const notifications = useNotifications();
   const [q, setQ] = useState("");
+
+  async function openNotification(n: NotificationRow) {
+    const target = resolveNotificationTarget(n);
+    nav.navigate(target.tab, { sub: target.sub, req: Date.now() } as never);
+    if (!n.isRead) await networkRepo.markNotificationsRead(session);
+  }
 
   /** Single navigation sink for every resolved intent. */
   const goTo = useCallback((destination: FarmerDestination) => {
@@ -68,7 +77,7 @@ export function FarmerHomeScreen() {
     }
     toast.success(`${tr("Opening", lang)} ${tr(intent.label, lang)}`);
     goTo(intent.destination);
-  }, [goTo]);
+  }, [goTo, lang]);
 
   const voice = useVoiceInput(handleCommand);
   const listening = voice.status === "listening";
@@ -104,14 +113,20 @@ export function FarmerHomeScreen() {
           onPress={() => goTo({ kind: "tab", tab: "Schemes" })} />
       </View>
 
-      {unread > 0 && (
-        <Pressable style={s.notice} onPress={() => nav.navigate("Connect", { sub: "farmers", req: Date.now() })}>
-          <Badge color="#ffffff" bg={colors.farmer}>
-            {`${unread} new ${unread === 1 ? "update" : "updates"}`}
-          </Badge>
-          <Muted style={{ flex: 1 }}>Tap to open My Network.</Muted>
-        </Pressable>
-      )}
+      <View style={s.notifCard}>
+        <Text size="sm" weight="700">Notifications</Text>
+        {notifications.length === 0
+          ? <Muted>No new notifications.</Muted>
+          : notifications.slice(0, 8).map((n) => (
+            <Pressable key={n.id} style={s.notifRow} onPress={() => openNotification(n)}>
+              {!n.isRead && <View style={s.notifDot} />}
+              <View style={{ flex: 1 }}>
+                <Text size="sm" weight={n.isRead ? "400" : "700"} numberOfLines={1}>{n.title}</Text>
+                {n.body !== "" && <Muted numberOfLines={1}>{n.body}</Muted>}
+              </View>
+            </Pressable>
+          ))}
+      </View>
 
       {/* ---------------- Krishi Bandhu ---------------- */}
       <View style={[s.bandhu, listening && { borderColor: colors.farmer, borderWidth: 2 }]}>
@@ -197,10 +212,12 @@ export function FarmerHomeScreen() {
 
 const s = StyleSheet.create({
   tiles: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md },
-  notice: {
-    flexDirection: "row", alignItems: "center", gap: spacing.sm,
-    backgroundColor: colors.farmerSoft, borderRadius: radius.md, padding: spacing.md,
+  notifCard: {
+    borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
+    backgroundColor: colors.card, padding: spacing.md, gap: spacing.sm,
   },
+  notifRow: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
+  notifDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.farmer, marginTop: 6 },
   bandhu: {
     borderWidth: 1, borderColor: colors.border, borderRadius: radius.xl,
     backgroundColor: colors.card, padding: spacing.md, gap: spacing.md,

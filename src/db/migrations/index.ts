@@ -11,6 +11,8 @@ import { MIGRATION_009 } from "./009_readiness";
 import { MIGRATION_010 } from "./010_geography";
 import { MIGRATION_011 } from "./011_services";
 import { MIGRATION_012 } from "./012_notifications_order_id_repair";
+import { MIGRATION_013 } from "./013_multi_membership_and_schemes";
+import { MIGRATION_014 } from "./014_ledger_farmer_link";
 
 /**
  * Ordered migrations. Append new entries; never renumber or edit a shipped one.
@@ -33,6 +35,8 @@ const MIGRATIONS: { version: number; statements: string[] }[] = [
   { version: 10, statements: MIGRATION_010 },
   { version: 11, statements: MIGRATION_011 },
   { version: 12, statements: MIGRATION_012 },
+  { version: 13, statements: MIGRATION_013 },
+  { version: 14, statements: MIGRATION_014 },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length;

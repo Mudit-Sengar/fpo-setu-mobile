@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import type { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
-import { ClipboardList, Database, Package, Plus } from "lucide-react-native";
+import { ClipboardList, Database, Package, Plus, Trash2 } from "lucide-react-native";
 import { marketRepo, readinessRepo, requestRepo } from "../../db";
 import { describeWriteError } from "../../db/authz";
 import type { RequestRow, ResponseRow } from "../../db/repositories/requestRepository";
@@ -14,11 +14,11 @@ import { tr } from "../../lib/i18n";
 import { colors, radius, spacing } from "../../theme";
 import { RoleShell } from "../../components/layout/RoleShell";
 import {
-  Badge, Button, Card, CardContent, CardHeader, CardTitle,
+  Badge, Button, Card, CardContent, CardHeader, CardTitle, ConfirmDialog,
   Field, Input, Muted, Select, Text, toast,
 } from "../../components/ui";
 import { BuyerReadinessForm } from "../../features/buyer-requirements-form";
-import { ModeToggle, Stepper, useBuyerMode } from "../../features/buyer-shared";
+import { ModeToggle, useBuyerMode } from "../../features/buyer-shared";
 import type { BuyerTabParamList } from "../../navigation/types";
 
 /**
@@ -33,7 +33,7 @@ function splitList(text: string): string[] {
 export function BuyerHomeScreen() {
   const { mode } = useBuyerMode();
   return (
-    <RoleShell accent="buyer" screenName="Profile & Order" header={<Stepper />}>
+    <RoleShell accent="buyer" screenName="Profile & Order">
       <ModeToggle />
       {mode === "buyer" ? <BuyerView /> : <SupplierView />}
     </RoleShell>
@@ -196,6 +196,8 @@ function RequirementCard({ demand }: { demand: RequestRow }) {
   const { session, lang } = useApp();
   const [open, setOpen] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const responses = useDbQuery<ResponseRow[]>(
     () => (open ? requestRepo.listResponsesFor(session, demand.id) : Promise.resolve([])),
     [open, demand.id, session?.partyId],
@@ -217,6 +219,20 @@ function RequirementCard({ demand }: { demand: RequestRow }) {
     }
   }
 
+  async function remove() {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      await requestRepo.deleteRequest(session, demand.id);
+      toast.success("Requirement deleted.");
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not delete that requirement."));
+    } finally {
+      setDeleting(false);
+      setConfirmingDelete(false);
+    }
+  }
+
   return (
     <View style={s.requirementCard}>
       <View style={s.requirementHead}>
@@ -235,7 +251,21 @@ function RequirementCard({ demand }: { demand: RequestRow }) {
         ) : (
           <Badge color={colors.mutedForeground} bg={colors.muted}>No replies yet</Badge>
         )}
+        <Button size="sm" variant="ghost" accent={colors.destructive}
+          icon={<Trash2 size={11} color={colors.destructive} />}
+          onPress={() => setConfirmingDelete(true)}>
+          {""}
+        </Button>
       </View>
+
+      <ConfirmDialog
+        visible={confirmingDelete}
+        title="Delete this requirement?"
+        message={`${demand.item}${demand.responseCount > 0 ? ` and its ${demand.responseCount} ${demand.responseCount === 1 ? "reply" : "replies"}` : ""} will be removed. This cannot be undone.`}
+        busy={deleting}
+        onConfirm={remove}
+        onCancel={() => setConfirmingDelete(false)}
+      />
 
       {demand.responseCount > 0 && (
         <Button variant="ghost" size="sm" accent={colors.buyer}
@@ -273,6 +303,59 @@ function RequirementCard({ demand }: { demand: RequestRow }) {
           )}
         </View>
       ))}
+    </View>
+  );
+}
+
+/** One posted input-supply listing, with its own delete confirmation. */
+function SupplyPostingRow({ posting: p }: { posting: RequestRow }) {
+  const { session, lang } = useApp();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function remove() {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      await requestRepo.deleteRequest(session, p.id);
+      toast.success("Posting deleted.");
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not delete that posting."));
+    } finally {
+      setDeleting(false);
+      setConfirmingDelete(false);
+    }
+  }
+
+  return (
+    <View style={s.postingRow}>
+      <View style={{ flex: 1 }}>
+        <Text size="sm" weight="600">
+          {`${formatQuantity(p.qty, p.unit, p.qtyLabel)} · ${tr(p.item, lang)} · ${tr(p.category, lang)}`}
+        </Text>
+        <Muted>{`${p.district} · ${tr(p.windowLabel, lang)}`}</Muted>
+      </View>
+      {p.pendingCount > 0 ? (
+        <Badge color={colors.buyerForeground} bg={colors.buyer}>{`${p.pendingCount} ${tr("to review", lang)}`}</Badge>
+      ) : p.responseCount > 0 ? (
+        <Badge color={colors.mutedForeground} bg={colors.muted}>{`${p.responseCount} ${tr("replied", lang)}`}</Badge>
+      ) : (
+        <Badge color={colors.mutedForeground} bg={colors.muted}>No replies yet</Badge>
+      )}
+      <Button size="sm" variant="ghost" accent={colors.destructive}
+        icon={<Trash2 size={11} color={colors.destructive} />}
+        onPress={() => setConfirmingDelete(true)}>
+        {""}
+      </Button>
+
+      <ConfirmDialog
+        visible={confirmingDelete}
+        title="Delete this posting?"
+        message={`${p.item}${p.responseCount > 0 ? ` and its ${p.responseCount} ${p.responseCount === 1 ? "reply" : "replies"}` : ""} will be removed. This cannot be undone.`}
+        busy={deleting}
+        onConfirm={remove}
+        onCancel={() => setConfirmingDelete(false)}
+      />
     </View>
   );
 }
@@ -415,21 +498,7 @@ function SupplierView() {
           <CardHeader><CardTitle>Your open supply postings</CardTitle></CardHeader>
           <CardContent>
             {supplies.map((p) => (
-              <View key={p.id} style={s.postingRow}>
-                <View style={{ flex: 1 }}>
-                  <Text size="sm" weight="600">
-                    {`${formatQuantity(p.qty, p.unit, p.qtyLabel)} · ${tr(p.item, lang)} · ${tr(p.category, lang)}`}
-                  </Text>
-                  <Muted>{`${p.district} · ${tr(p.windowLabel, lang)}`}</Muted>
-                </View>
-                {p.pendingCount > 0 ? (
-                  <Badge color={colors.buyerForeground} bg={colors.buyer}>{`${p.pendingCount} ${tr("to review", lang)}`}</Badge>
-                ) : p.responseCount > 0 ? (
-                  <Badge color={colors.mutedForeground} bg={colors.muted}>{`${p.responseCount} ${tr("replied", lang)}`}</Badge>
-                ) : (
-                  <Badge color={colors.mutedForeground} bg={colors.muted}>No replies yet</Badge>
-                )}
-              </View>
+              <SupplyPostingRow key={p.id} posting={p} />
             ))}
           </CardContent>
         </Card>

@@ -2,12 +2,12 @@
 // src/components/fpo-sections.tsx. Each export renders the content for one chip;
 // the parent screen shows the chips and renders the chosen section.
 import React, { useEffect, useMemo, useState } from "react";
-import { StyleSheet, View, useWindowDimensions } from "react-native";
+import { Linking, StyleSheet, View, useWindowDimensions } from "react-native";
 import {
   AlertTriangle, Banknote, BookOpenCheck, Building2, CalendarDays, CheckCircle2,
-  ChevronRight, ClipboardList, FileCheck, GraduationCap, Handshake, Inbox, LandPlot,
-  Landmark, Mail, MessageCircle, Package, Phone, Plus, Send, ShieldCheck, Sparkles,
-  Sprout, Star, Target, TrendingUp, Truck, UserPlus, Users, Users2, Volume2, XCircle,
+  ChevronRight, ClipboardList, ExternalLink, GraduationCap, Handshake, Inbox, LandPlot,
+  Landmark, Mail, MessageCircle, Package, Pencil, Phone, Plus, Send, ShieldCheck, Sparkles,
+  Sprout, Star, Target, Trash2, TrendingUp, Truck, UserPlus, Users, Users2, Volume2, XCircle,
 } from "lucide-react-native";
 import { useApp } from "../lib/app-state";
 import { tr } from "../lib/i18n";
@@ -15,7 +15,7 @@ import { isSchemeEligible } from "../lib/mockData";
 import { explainMatch, matchScore } from "../lib/matching";
 import { formatQuantity, parseQuantity } from "../lib/quantity";
 import {
-  contentRepo, fpoRepo, marketRepo, membershipRepo, networkRepo, orderRepo,
+  contentRepo, farmerRepo, fpoRepo, marketRepo, membershipRepo, networkRepo, orderRepo,
   readinessRepo, requestRepo, reviewRepo, serviceRepo,
 } from "../db";
 import type { ServiceRequestRow } from "../db/repositories/serviceRepository";
@@ -26,13 +26,13 @@ import { describeWriteError } from "../db/authz";
 import type { RequestRow, ResponseRow } from "../db/repositories/requestRepository";
 import { useDbQuery } from "../db/useDbQuery";
 import type {
-  FPO, FpoCumulative, FpoMeeting, FPOSupply, LedgerEntry,
+  FPO, FpoCumulative, FpoMeeting, FPOSupply, LedgerEntry, NewLedgerEntry,
   OpportunityDetail, Scheme, Supplier,
 } from "../db/types";
 import { useSpeech } from "../hooks/useSpeech";
 import { colors, radius, spacing } from "../theme";
 import {
-  Badge, Button, Card, CardContent, CardHeader, CardTitle, Checkbox,
+  Badge, Button, Card, CardContent, CardHeader, CardTitle, Checkbox, ConfirmDialog,
   Dialog, Field, Gauge, Input, Muted, Progress, Select, Table, Text, toast,
 } from "../components/ui";
 import { CourseCard, EmptyHint, SectionCard, SectionCardRow, Segmented } from "../components/common";
@@ -73,6 +73,22 @@ export function PostRequestSection() {
     () => requestRepo.listMyRequests(session, "commodity_supply"), [session?.partyId], []);
   const needs = useDbQuery<RequestRow[]>(
     () => requestRepo.listMyRequests(session, "input_demand"), [session?.partyId], []);
+  const [toDelete, setToDelete] = useState<RequestRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function confirmDelete() {
+    if (toDelete == null || deleting) return;
+    setDeleting(true);
+    try {
+      await requestRepo.deleteRequest(session, toDelete.id);
+      toast.success("Posting deleted.");
+      setToDelete(null);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not delete that posting."));
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   return (
     <>
@@ -86,13 +102,14 @@ export function PostRequestSection() {
             postings and can reply to them.
           </Muted>
           <Table
-            minWidth={520}
+            minWidth={580}
             columns={[
               { key: "commodity", label: "Commodity", flex: 1.3 },
               { key: "grade", label: "Grade" },
               { key: "qty", label: "Qty (MT)", align: "right" },
               { key: "window", label: "Harvest window", flex: 1.4 },
               { key: "replies", label: "Replies", flex: 1.3 },
+              { key: "action", label: "", flex: 0.6 },
             ]}
             rows={supply.map((x) => ({
               commodity: x.item,
@@ -100,6 +117,13 @@ export function PostRequestSection() {
               qty: String(x.qty),
               window: x.windowLabel,
               replies: <ResponseBadge total={x.responseCount} pending={x.pendingCount} />,
+              action: (
+                <Button size="sm" variant="ghost" accent={colors.destructive}
+                  icon={<Trash2 size={11} color={colors.destructive} />}
+                  onPress={() => setToDelete(x)}>
+                  {""}
+                </Button>
+              ),
             }))}
           />
           <AddCommodityForm onAdd={async (x) => {
@@ -131,13 +155,14 @@ export function PostRequestSection() {
             categories see these postings and can quote against them.
           </Muted>
           <Table
-            minWidth={520}
+            minWidth={580}
             columns={[
               { key: "item", label: "Item", flex: 1.6 },
               { key: "category", label: "Category" },
               { key: "qty", label: "Qty" },
               { key: "window", label: "Window" },
               { key: "replies", label: "Quotes", flex: 1.3 },
+              { key: "action", label: "", flex: 0.6 },
             ]}
             rows={needs.map((n) => ({
               item: n.item,
@@ -145,6 +170,13 @@ export function PostRequestSection() {
               qty: formatQuantity(n.qty, n.unit, n.qtyLabel),
               window: n.windowLabel,
               replies: <ResponseBadge total={n.responseCount} pending={n.pendingCount} />,
+              action: (
+                <Button size="sm" variant="ghost" accent={colors.destructive}
+                  icon={<Trash2 size={11} color={colors.destructive} />}
+                  onPress={() => setToDelete(n)}>
+                  {""}
+                </Button>
+              ),
             }))}
           />
           <AddNeedForm onAdd={async (n) => {
@@ -169,6 +201,15 @@ export function PostRequestSection() {
           }} />
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        visible={toDelete != null}
+        title="Delete this posting?"
+        message={toDelete == null ? "" : `${toDelete.item}${toDelete.responseCount > 0 ? ` and its ${toDelete.responseCount} ${toDelete.responseCount === 1 ? "reply" : "replies"}` : ""} will be removed. This cannot be undone.`}
+        busy={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setToDelete(null)}
+      />
     </>
   );
 }
@@ -220,24 +261,26 @@ export function ResponsesSection() {
             </Muted>
           )}
           {pending.map((r) => (
-            <View key={r.id} style={s.itemCard}>
+            <View key={r.id} style={s.compactCard}>
               <View style={s.rowBetween}>
                 <View style={{ flex: 1 }}>
-                  <Text size="sm" weight="700">{r.responderName}</Text>
-                  <Muted>{`${tr(r.responderKind === "buyer" ? "Buyer" : r.responderKind === "supplier" ? "Supplier" : r.responderKind, lang)} · ${tr("replied to", lang)} ${r.requestItem}`}</Muted>
+                  <Text size="sm" weight="700" numberOfLines={1}>{r.responderName}</Text>
+                  <Muted numberOfLines={1}>
+                    {`${tr(r.responderKind === "buyer" ? "Buyer" : r.responderKind === "supplier" ? "Supplier" : r.responderKind, lang)} · ${r.requestItem} · ${r.requestQtyLabel}`}
+                  </Muted>
                 </View>
                 <Badge color={colors.fpoForeground} bg={colors.fpo}>Pending</Badge>
               </View>
 
-              <Muted style={{ marginTop: spacing.sm }}>
-                {`Your posting: ${r.requestItem} · ${r.requestQtyLabel}`}
-              </Muted>
-              {r.offeredQty != null && (
-                <Muted>{`Offered: ${r.offeredQty} ${r.offeredPrice != null ? `at ₹${r.offeredPrice}` : ""}`}</Muted>
+              {(r.offeredQty != null || r.message !== "") && (
+                <Muted numberOfLines={1} style={{ marginTop: 4 }}>
+                  {r.offeredQty != null
+                    ? `Offered: ${r.offeredQty}${r.offeredPrice != null ? ` at ₹${r.offeredPrice}` : ""}${r.message !== "" ? ` · "${r.message}"` : ""}`
+                    : `"${r.message}"`}
+                </Muted>
               )}
-              {r.message !== "" && <Text size="sm" style={{ marginTop: spacing.sm }}>{`"${r.message}"`}</Text>}
 
-              <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
+              <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
                 <Button size="sm" accent={colors.fpo} disabled={busyId === r.id}
                   onPress={() => decide(r, "accepted")}>
                   Accept
@@ -286,9 +329,22 @@ export function MeetingSection() {
   const { session, lang } = useApp();
   const { fpoId } = useActiveFpo();
   const meetings = useDbQuery<FpoMeetingRow[]>(() => fpoRepo.listMeetings(fpoId), [fpoId], []);
-  // The real number of active members, not the seeded `fpos.members` column.
-  const memberCount = useDbQuery<number>(
-    () => membershipRepo.countActiveMembers(fpoId), [fpoId], 0);
+  const [toDelete, setToDelete] = useState<FpoMeetingRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function confirmDelete() {
+    if (toDelete == null || deleting) return;
+    setDeleting(true);
+    try {
+      await fpoRepo.deleteMeeting(session, fpoId, toDelete.id);
+      toast.success("Meeting deleted.");
+      setToDelete(null);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not delete that meeting."));
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   return (
     <Card>
@@ -296,22 +352,28 @@ export function MeetingSection() {
         <TitleWithIcon icon={<CalendarDays size={16} color={colors.fpo} />} title="FPO Meetings" />
       </CardHeader>
       <CardContent>
-        <Table
-          minWidth={470}
-          columns={[
-            { key: "date", label: "Date" },
-            { key: "time", label: "Time", flex: 0.6 },
-            { key: "agenda", label: "Agenda", flex: 2 },
-            { key: "venue", label: "Venue", flex: 1.3 },
-            { key: "invited", label: "Invitations", flex: 1.2 },
-          ]}
-          rows={meetings.map((m) => ({
-            date: m.date, time: m.time, agenda: m.agenda, venue: m.venue,
-            invited: m.invitedCount === 0
-              ? <Muted>Not sent</Muted>
-              : <Badge color={colors.mutedForeground} bg={colors.muted}>{`${m.invitedCount} ${tr("invited", lang)}`}</Badge>,
-          }))}
-        />
+        {meetings.length === 0 && <Muted>No meetings logged yet.</Muted>}
+        {meetings.map((m) => (
+          <View key={m.id} style={s.itemCard}>
+            <View style={s.rowBetween}>
+              <View style={{ flex: 1 }}>
+                <Text size="sm" weight="700">{m.agenda || "Meeting"}</Text>
+                <Muted>{`${m.date} · ${m.time}`}</Muted>
+              </View>
+              <Button size="sm" variant="ghost" accent={colors.destructive}
+                icon={<Trash2 size={11} color={colors.destructive} />}
+                onPress={() => setToDelete(m)}>
+                {""}
+              </Button>
+            </View>
+            <Muted style={{ marginTop: 4 }}>{`Venue: ${m.venue}`}</Muted>
+            <View style={{ flexDirection: "row", marginTop: spacing.sm }}>
+              {m.invitedCount === 0
+                ? <Muted>Not sent</Muted>
+                : <Badge color={colors.mutedForeground} bg={colors.muted}>{`${m.invitedCount} ${tr("invited", lang)}`}</Badge>}
+            </View>
+          </View>
+        ))}
         <AddMeetingForm
           onAdd={async (m) => {
             try {
@@ -326,16 +388,23 @@ export function MeetingSection() {
             try {
               const sent = await membershipRepo.inviteMembersToMeeting(session, meetingId);
               toast.success(sent === 0
-                ? "No active members to notify yet."
-                : `${sent} ${tr("member", lang)} ${sent === 1 ? tr("farmer", lang) : tr("farmers", lang)} ${tr("notified.", lang)}`);
+                ? "Meeting logged. No active members to notify yet."
+                : `Meeting logged. ${sent} ${tr("member", lang)} ${sent === 1 ? tr("farmer", lang) : tr("farmers", lang)} ${tr("notified.", lang)}`);
             } catch (e) {
-              toast.error(describeWriteError(e, "Could not send those invitations."));
+              toast.error(describeWriteError(e, "Meeting logged, but could not send those invitations."));
             }
           }}
-          memberCount={memberCount}
-          latestMeetingId={meetings[0]?.id ?? null}
         />
       </CardContent>
+
+      <ConfirmDialog
+        visible={toDelete != null}
+        title="Delete this meeting?"
+        message={toDelete == null ? "" : `${toDelete.agenda || "This meeting"} on ${toDelete.date}${toDelete.invitedCount > 0 ? ` and its ${toDelete.invitedCount} invitation${toDelete.invitedCount === 1 ? "" : "s"}` : ""} will be removed. This cannot be undone.`}
+        busy={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setToDelete(null)}
+      />
     </Card>
   );
 }
@@ -350,6 +419,23 @@ export function BookkeepingSection() {
   // mix of farmer ids, buyer ids and words like FPO-POOL.
   const counterparties = useDbQuery<{ partyId: number; name: string; kind: string }[]>(
     () => orderRepo.listTradedParties(session), [session?.partyId], []);
+  const [toDelete, setToDelete] = useState<LedgerEntry | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [toEdit, setToEdit] = useState<LedgerEntry | null>(null);
+
+  async function confirmDelete() {
+    if (toDelete == null || deleting) return;
+    setDeleting(true);
+    try {
+      await fpoRepo.deleteLedgerEntry(session, fpoId, toDelete.id);
+      toast.success("Ledger entry deleted.");
+      setToDelete(null);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not delete that entry."));
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   return (
     <Card>
@@ -360,50 +446,175 @@ export function BookkeepingSection() {
         </View>
       </CardHeader>
       <CardContent>
-        <Table
-          minWidth={620}
-          columns={[
-            { key: "date", label: "Date" },
-            { key: "desc", label: "Description", flex: 2 },
-            { key: "type", label: "Type", flex: 0.8 },
-            { key: "cp", label: "Buyer / Seller ID", flex: 1.4 },
-            { key: "amount", label: "Amount ₹", align: "right" },
-            { key: "balance", label: "Balance ₹", align: "right" },
-          ]}
-          rows={ledger.map((e) => ({
-            date: e.date,
-            desc: (
-              <View>
-                <Text size="xs">{e.desc}</Text>
-                {e.refId != null && <Text size="xxs" color={colors.mutedForeground} noTranslate>{`Ref ${e.refId}`}</Text>}
-              </View>
-            ),
-            type: e.type === "Income"
-              ? <Badge color="#ffffff" bg={colors.farmer}>Income</Badge>
-              : <Badge color={colors.mutedForeground} bg={colors.muted}>Expense</Badge>,
-            cp: <Text size="xxs" noTranslate>{e.counterpartyName !== "" ? e.counterpartyName : (e.counterpartyLabel ?? "—")}</Text>,
-            amount: inr(e.amount),
-            balance: inr(e.balance),
-          }))}
-        />
-        <Muted style={{ marginTop: spacing.sm }}>
-          Entries created by a paid order are posted automatically and carry the
-          counterparty and order reference, so they match the other side&apos;s records.
-        </Muted>
         <AddEntry
           onAdd={async (entry) => {
             try {
-              await fpoRepo.insertLedgerEntry(fpoId, entry);
+              const id = await fpoRepo.insertLedgerEntry(fpoId, entry);
               toast.success("Ledger entry added.");
+              return id;
             } catch (e) {
               toast.error(describeWriteError(e, "Could not add that entry."));
+              return null;
             }
           }}
           running={ledger.length > 0 ? ledger[ledger.length - 1].balance : 0}
           counterparties={counterparties}
         />
+
+        <Muted style={{ marginTop: spacing.md, marginBottom: spacing.sm }}>
+          Entries created by a paid order are posted automatically and carry the
+          counterparty and order reference, so they match the other side&apos;s records.
+        </Muted>
+
+        {ledger.length === 0 && <Muted>No ledger entries yet.</Muted>}
+        {ledger.map((e) => (
+          <View key={e.id} style={s.itemCard}>
+            <View style={s.rowBetween}>
+              <View style={{ flex: 1 }}>
+                <Text size="sm" weight="700">{e.desc || e.type}</Text>
+                <Muted>
+                  {`${e.date} · ${e.counterpartyName !== "" ? e.counterpartyName : (e.counterpartyLabel ?? "—")}`}
+                </Muted>
+                {e.refId != null && <Text size="xxs" color={colors.mutedForeground} noTranslate>{`Ref ${e.refId}`}</Text>}
+              </View>
+              {e.type === "Income"
+                ? <Badge color="#ffffff" bg={colors.farmer}>Income</Badge>
+                : <Badge color={colors.mutedForeground} bg={colors.muted}>Expense</Badge>}
+            </View>
+            <View style={[s.rowBetween, { marginTop: spacing.sm }]}>
+              <Muted>{`Balance: ₹${inr(e.balance)}`}</Muted>
+              <Text size="sm" weight="700" noTranslate>{`₹${inr(e.amount)}`}</Text>
+            </View>
+            <View style={{ flexDirection: "row", marginTop: spacing.sm }}>
+              <Button size="sm" variant="ghost" accent={colors.fpo}
+                icon={<Pencil size={11} color={colors.fpo} />}
+                onPress={() => setToEdit(e)}>
+                Edit
+              </Button>
+              <Button size="sm" variant="ghost" accent={colors.destructive}
+                icon={<Trash2 size={11} color={colors.destructive} />}
+                onPress={() => setToDelete(e)}>
+                Delete
+              </Button>
+            </View>
+          </View>
+        ))}
       </CardContent>
+
+      <ConfirmDialog
+        visible={toDelete != null}
+        title="Delete this entry?"
+        message={toDelete == null ? "" : `${toDelete.desc || toDelete.type} · ₹${inr(toDelete.amount)} on ${toDelete.date}. This also removes the matching entry from the farmer's transaction history, if there is one. This cannot be undone.`}
+        busy={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setToDelete(null)}
+      />
+
+      <EditEntryDialog
+        entry={toEdit}
+        fpoId={fpoId}
+        counterparties={counterparties}
+        onClose={() => setToEdit(null)}
+      />
     </Card>
+  );
+}
+
+/**
+ * Edits an existing ledger entry's description/type/amount. The counterparty
+ * is fixed at creation — changing it would mean deciding whether to move or
+ * discard a linked farmer transaction, which the FPO can already do more
+ * directly by deleting the entry and adding a new one.
+ *
+ * When the entry has a linked farmer transaction (an Expense against a member,
+ * see AddEntry), its crop and quantity are prefilled and editable here too, so
+ * the farmer's transaction history reflects the correction, not just the ledger.
+ */
+function EditEntryDialog({
+  entry, fpoId, counterparties, onClose,
+}: {
+  entry: LedgerEntry | null;
+  fpoId: string;
+  counterparties: { partyId: number; name: string; kind: string }[];
+  onClose: () => void;
+}) {
+  const { session } = useApp();
+  const [desc, setDesc] = useState("");
+  const [amt, setAmt] = useState("");
+  const [type, setType] = useState<"Income" | "Expense">("Income");
+  const [crop, setCrop] = useState("");
+  const [qty, setQty] = useState("");
+  const [hasFarmerTxn, setHasFarmerTxn] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const cpKind = entry?.counterpartyPartyId != null
+    ? counterparties.find((c) => c.partyId === entry.counterpartyPartyId)?.kind
+    : undefined;
+  const isMemberProcurement = hasFarmerTxn && type === "Expense" && cpKind === "farmer";
+
+  useEffect(() => {
+    if (entry == null) return;
+    setDesc(entry.desc);
+    setAmt(String(entry.amount));
+    setType(entry.type);
+    let cancelled = false;
+    fpoRepo.getFarmerTxnForLedgerEntry(entry.id).then((t) => {
+      if (cancelled) return;
+      setHasFarmerTxn(t != null);
+      setCrop(t?.crop ?? "");
+      setQty(t != null ? String(t.qtyQ) : "");
+    });
+    return () => { cancelled = true; };
+  }, [entry]);
+
+  async function save() {
+    if (entry == null || saving) return;
+    const amount = Number(amt);
+    if (!desc || !amount) return;
+    setSaving(true);
+    try {
+      await fpoRepo.updateLedgerEntry(session, fpoId, entry.id, {
+        date: entry.date,
+        desc,
+        type,
+        amount,
+        counterpartyPartyId: entry.counterpartyPartyId ?? null,
+        counterpartyLabel: entry.counterpartyLabel ?? null,
+        farmerCrop: isMemberProcurement && crop.trim() !== "" ? crop.trim() : undefined,
+        farmerQtyQ: isMemberProcurement && qty.trim() !== "" ? Number(qty) : undefined,
+      });
+      toast.success("Ledger entry updated.");
+      onClose();
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not update that entry."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog visible={entry != null} onClose={onClose} title="Edit entry">
+      <Field label="Description"><Input value={desc} onChangeText={setDesc} placeholder="Description" /></Field>
+      <Field label="Type"><Select value={type} options={["Income", "Expense"] as const} onChange={setType} /></Field>
+      <Field label="Amount ₹"><Input value={amt} onChangeText={setAmt} placeholder="Amount ₹" keyboardType="numeric" /></Field>
+      {isMemberProcurement && (
+        <>
+          <Muted style={{ marginBottom: spacing.sm }}>
+            This also updates the produce record on the farmer&apos;s own transaction history.
+          </Muted>
+          <Field label="Crop"><Input value={crop} onChangeText={setCrop} placeholder="e.g. Onion" /></Field>
+          <Field label="Quantity (quintals)">
+            <Input value={qty} onChangeText={setQty} placeholder="e.g. 12" keyboardType="numeric" />
+          </Field>
+        </>
+      )}
+      <View style={{ flexDirection: "row", gap: spacing.sm }}>
+        <Button variant="outline" style={{ flex: 1 }} disabled={saving} onPress={onClose}>Cancel</Button>
+        <Button accent={colors.fpo} style={{ flex: 1 }} disabled={saving} onPress={save}>
+          {saving ? "Saving…" : "Save changes"}
+        </Button>
+      </View>
+    </Dialog>
   );
 }
 
@@ -428,6 +639,7 @@ export function ExpansionPlannerSection() {
           active={tab === "growth"}
           onPress={() => setTab("growth")}
           icon={<TrendingUp size={22} color={tab === "growth" ? "#fff" : colors.fpo} />}
+          lines={3}
         />
       </SectionCardRow>
       {tab === "sizing" ? <OpportunitySizingPanel /> : <MarketLinkedGrowthPlanning />}
@@ -530,7 +742,14 @@ function OpportunitySizingPanel() {
 
             <Button variant="outline" accent={colors.fpo}
               icon={<Volume2 size={16} color={colors.fpo} />}
-              onPress={() => speak(`${openOpp.label} opportunity. ${openOpp.action}`)}>
+              onPress={() => speak([
+                `${openOpp.label} opportunity.`,
+                openOpp.action,
+                "Step by step path.",
+                ...openOpp.steps.map((st, i) => `${i + 1}. ${st}`),
+                `Investment: ${openOpp.investment}.`,
+                `Expected outcome: ${openOpp.outcome}.`,
+              ].join(" "))}>
               Listen
             </Button>
 
@@ -634,6 +853,30 @@ export function LocateBuyerSection() {
   const [replyTo, setReplyTo] = useState<RequestRow | null>(null);
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
+  const [chatBusyId, setChatBusyId] = useState<string | null>(null);
+
+  async function chatWithBuyer(b: { id: string; name: string; commodities: string[] }) {
+    if (chatBusyId != null) return;
+    setChatBusyId(b.id);
+    try {
+      const partyId = await networkRepo.partyIdFor("buyer", b.id);
+      if (partyId == null) {
+        toast.error("That buyer is not reachable yet.");
+        return;
+      }
+      await networkRepo.requestConnection(session, {
+        otherPartyId: partyId,
+        relationType: "trade",
+        message: `We deal in ${b.commodities.filter((c) => fpoCommodities.includes(c)).join(", ") || b.commodities[0]}. Would like to connect.`,
+        openThread: true,
+      });
+      toast.success(`${tr("Chat request sent to", lang)} ${b.name}.`);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not send that request."));
+    } finally {
+      setChatBusyId(null);
+    }
+  }
 
   // The FPO's available quantity for the demanded commodity, used for the score.
   const availableFor = (commodity: string) =>
@@ -735,12 +978,13 @@ export function LocateBuyerSection() {
                     {" · Volume: "}
                     <Text size="xs">{`${b.typicalVolumeMT} MT/yr`}</Text>
                   </Muted>
+                  {b.qualitySpecs !== "" && <Muted>{"Wants: "}<Text size="xs">{b.qualitySpecs}</Text></Muted>}
                   {/* No match badge here: this is a directory of who exists, not a
                       ranking. Scores belong on the requirement cards above, where
                       there is a quantity and a grade to score against. */}
                   <Button size="sm" variant="outline" accent={colors.fpo} style={{ marginTop: spacing.md }}
-                    onPress={() => toast.message(`${b.name} ${tr("buys", lang)} ${b.commodities.map((c) => tr(c, lang)).join(", ")} — ${b.qualitySpecs}`)}>
-                    View requirements
+                    disabled={chatBusyId === b.id} onPress={() => chatWithBuyer(b)}>
+                    {chatBusyId === b.id ? "Sending…" : "Chat"}
                   </Button>
                 </View>
               ))}
@@ -862,7 +1106,6 @@ export function AccessCreditSection() {
   const lenders = useDbQuery(() => serviceRepo.listProviders("lender"), [], []);
   const applications = useDbQuery<ServiceRequestRow[]>(
     () => serviceRepo.listMyRequests(session), [session?.partyId], []);
-  const [openProposal, setOpenProposal] = useState(false);
   const [busy, setBusy] = useState<number | null>(null);
 
   const statusWith = (partyId: number) =>
@@ -924,47 +1167,6 @@ export function AccessCreditSection() {
           })}
         </CardContent>
       </Card>
-
-      <Card>
-        <CardHeader>
-          <TitleWithIcon icon={<FileCheck size={16} color={colors.fpo} />} title="Generate a Bankable Proposal" />
-        </CardHeader>
-        <CardContent>
-          <Button accent={colors.fpo} onPress={() => setOpenProposal(true)}>Generate bankable proposal</Button>
-        </CardContent>
-      </Card>
-
-      <Dialog visible={openProposal} onClose={() => setOpenProposal(false)}
-        title={`${tr("Bankable Loan Proposal", lang)} — ${tr(fpo?.name ?? "", lang)}`}>
-        <Kv k="Requested amount" v="₹48,00,000" />
-        <Kv k="Purpose" v="Working capital for kharif aggregation" />
-        <Kv k="Projected revenue uplift" v="₹1.6 Cr / season (+22%)" />
-        <Kv k="Compliance score" v={`${fpo?.complianceScore ?? 0}/100`} />
-        <Kv k="Repayment" v="12 months · seasonal bullet" />
-        {/* Sends the proposal to every lender listed, as a real application each. */}
-        <Button accent={colors.fpo}
-          onPress={async () => {
-            try {
-              for (const l of lenders) {
-                await serviceRepo.request(session, {
-                  providerPartyId: l.partyId,
-                  serviceType: "credit",
-                  subject: `Bankable proposal — ${fpo?.name ?? ""}`,
-                  details: "Working capital for kharif aggregation. 12 months, seasonal bullet.",
-                  amountRequested: 4800000,
-                });
-              }
-              toast.success(lenders.length === 0
-                ? tr("No lenders are listed yet.", lang)
-                : `${tr("Proposal sent to", lang)} ${lenders.length} ${lenders.length === 1 ? tr("lender", lang) : tr("lenders", lang)}.`);
-              setOpenProposal(false);
-            } catch (e) {
-              toast.error(describeWriteError(e, "Could not share that proposal."));
-            }
-          }}>
-          Share with lenders
-        </Button>
-      </Dialog>
     </>
   );
 }
@@ -1024,6 +1226,19 @@ export function GovtSchemesSection() {
                   : <XCircle size={12} color={colors.destructive} />}
                 <Muted>{eligible ? "This FPO currently qualifies." : "This FPO does not currently qualify."}</Muted>
               </View>
+              <Button size="sm" variant="outline" accent={colors.fpo} style={{ marginTop: spacing.sm, alignSelf: "flex-start" }}
+                icon={<ExternalLink size={14} color={colors.fpo} />}
+                onPress={async () => {
+                  if (!sch.url) {
+                    toast.error("No portal link available for this scheme.");
+                    return;
+                  }
+                  const ok = await Linking.canOpenURL(sch.url);
+                  if (ok) await Linking.openURL(sch.url);
+                  else toast.error("Could not open the scheme portal.");
+                }}>
+                Apply
+              </Button>
             </View>
           );
         })}
@@ -1387,6 +1602,9 @@ export function RelationshipsSection() {
   const [filters, setFilters] = useState<Record<Status, boolean>>({ "Active": true, "At-risk": true, "Dormant": true });
   const filtered = useMemo(() => members.filter((m) => filters[m.status]), [members, filters]);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [removingId, setRemovingId] = useState<number | null>(null);
+  const [editing, setEditing] = useState<EngagementRow | null>(null);
+  const [toRemove, setToRemove] = useState<EngagementRow | null>(null);
 
   async function decide(m: MembershipRow, decision: "active" | "rejected") {
     if (busyId != null) return;
@@ -1410,6 +1628,21 @@ export function RelationshipsSection() {
       toast.success(`${tr("Message sent to", lang)} ${m.name}.`);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not reach that member."));
+    }
+  }
+
+  async function removeMember() {
+    const m = toRemove;
+    if (m == null || removingId != null) return;
+    setRemovingId(m.membershipId);
+    try {
+      await membershipRepo.removeMember(session, m.membershipId);
+      toast.success(`${m.name} ${tr("has been removed from your FPO.", lang)}`);
+      setToRemove(null);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not remove that member."));
+    } finally {
+      setRemovingId(null);
     }
   }
 
@@ -1529,7 +1762,7 @@ export function RelationshipsSection() {
               { key: "sold", label: "Sold (q)", align: "right" },
               { key: "trainings", label: "Trainings", align: "right" },
               { key: "last", label: "Last txn", flex: 1.2 },
-              { key: "action", label: "", flex: 1.2 },
+              { key: "action", label: "", flex: 1.6 },
             ]}
             rows={filtered.map((m) => ({
               name: m.name,
@@ -1538,18 +1771,95 @@ export function RelationshipsSection() {
               sold: String(m.soldThroughFPO),
               trainings: String(m.trainings),
               last: m.lastTxn,
-              action: m.status !== "Active" ? (
-                <Button size="sm" variant="outline" accent={colors.fpo}
-                  icon={<AlertTriangle size={11} color={colors.fpo} />}
-                  onPress={() => intervene(m)}>
-                  Intervene
-                </Button>
-              ) : <Text size="xs"> </Text>,
+              action: (
+                <View style={{ flexDirection: "row", gap: 4, flexWrap: "wrap" }}>
+                  {m.status !== "Active" && (
+                    <Button size="sm" variant="outline" accent={colors.fpo}
+                      icon={<AlertTriangle size={11} color={colors.fpo} />}
+                      onPress={() => intervene(m)}>
+                      Intervene
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" accent={colors.fpo}
+                    icon={<Pencil size={11} color={colors.fpo} />}
+                    onPress={() => setEditing(m)}>
+                    Edit
+                  </Button>
+                  <Button size="sm" variant="ghost" accent={colors.destructive}
+                    disabled={removingId === m.membershipId}
+                    icon={<Trash2 size={11} color={colors.destructive} />}
+                    onPress={() => setToRemove(m)}>
+                    Remove
+                  </Button>
+                </View>
+              ),
             }))}
           />
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        visible={toRemove != null}
+        title="Remove this member?"
+        message={toRemove == null ? "" : `${toRemove.name} will lose active membership of your FPO. Their transaction history is kept. This cannot be undone from here.`}
+        confirmLabel="Remove"
+        busy={removingId === toRemove?.membershipId}
+        onConfirm={removeMember}
+        onCancel={() => setToRemove(null)}
+      />
+
+      <Dialog visible={editing != null} onClose={() => setEditing(null)}
+        title={editing ? `Edit ${editing.name}` : undefined}>
+        {editing != null && (
+          <EditMemberForm
+            farmerId={editing.farmerId}
+            village={editing.village}
+            onDone={() => setEditing(null)}
+          />
+        )}
+      </Dialog>
     </>
+  );
+}
+
+function EditMemberForm({
+  farmerId, village: initialVillage, onDone,
+}: { farmerId: string; village: string; onDone: () => void }) {
+  const { session, lang } = useApp();
+  const [village, setVillage] = useState(initialVillage);
+  const [landAcres, setLandAcres] = useState("");
+  const [crops, setCrops] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  return (
+    <View style={{ gap: spacing.sm }}>
+      <Field label="Village"><Input value={village} onChangeText={setVillage} placeholder="Village" /></Field>
+      <Field label="Landholding (acres)">
+        <Input value={landAcres} onChangeText={setLandAcres} placeholder="e.g. 4.5" keyboardType="numeric" />
+      </Field>
+      <Field label="Crops (comma separated)">
+        <Input value={crops} onChangeText={setCrops} placeholder="e.g. Onion, Soybean" />
+      </Field>
+      <Button full accent={colors.fpo} disabled={saving}
+        onPress={async () => {
+          setSaving(true);
+          try {
+            await farmerRepo.updateMemberProfile(session, farmerId, {
+              village: village.trim() === "" ? null : village.trim(),
+              landAcres: landAcres.trim() === "" ? null : parseFloat(landAcres),
+              crops: crops.trim() === "" ? null : crops.split(",").map((c) => c.trim()).filter((c) => c !== ""),
+            });
+            toast.success(`${tr("Member details updated.", lang)}`);
+            onDone();
+          } catch (e) {
+            toast.error(describeWriteError(e, "Could not update that member."));
+          } finally {
+            setSaving(false);
+          }
+        }}>
+        {saving ? "Saving…" : "Save changes"}
+      </Button>
+    </View>
   );
 }
 
@@ -1625,12 +1935,10 @@ function AddNeedForm({ onAdd }: { onAdd: (n: InputNeedDraft) => void }) {
 }
 
 function AddMeetingForm({
-  onAdd, onNotify, memberCount, latestMeetingId,
+  onAdd, onNotify,
 }: {
   onAdd: (m: FpoMeeting) => Promise<number | null>;
   onNotify: (meetingId: number) => Promise<void>;
-  memberCount: number;
-  latestMeetingId: number | null;
 }) {
   const [date, setDate] = useState(""); const [time, setTime] = useState("");
   const [agenda, setAgenda] = useState(""); const [venue, setVenue] = useState("");
@@ -1640,25 +1948,18 @@ function AddMeetingForm({
       <Field label="Time"><Input value={time} onChangeText={setTime} placeholder="10:00" /></Field>
       <Field label="Agenda"><Input value={agenda} onChangeText={setAgenda} placeholder="Agenda" /></Field>
       <Field label="Venue"><Input value={venue} onChangeText={setVenue} placeholder="Venue" /></Field>
+      {/* Logging a meeting immediately invites every active member — one
+          invitation row and one notification per member, so the count in the
+          toast is the number actually written, not a figure read off a column. */}
       <Button full accent={colors.fpo} icon={<Plus size={16} color="#ffffff" />}
         onPress={async () => {
           if (!date || !agenda) return;
           const id = await onAdd({ date, time: time || "10:00", agenda, venue: venue || "FPO office" });
           if (id == null) return;
           setDate(""); setTime(""); setAgenda(""); setVenue("");
-          toast.success("Meeting logged.");
+          await onNotify(id);
         }}>
-        Log meeting
-      </Button>
-      {/* Writes one invitation row per active member, so the count reported back
-          is the number actually sent rather than a figure read off a column. */}
-      <Button full variant="outline" accent={colors.fpo} style={{ marginTop: spacing.sm }}
-        icon={<Send size={16} color={colors.fpo} />}
-        disabled={latestMeetingId == null}
-        onPress={() => { if (latestMeetingId != null) void onNotify(latestMeetingId); }}>
-        {latestMeetingId == null
-          ? "Log a meeting first"
-          : `Notify ${memberCount} member ${memberCount === 1 ? "farmer" : "farmers"}`}
+        Log meeting and notify members
       </Button>
     </View>
   );
@@ -1670,14 +1971,17 @@ const OTHER = "__other";
 function AddEntry({
   onAdd, running, counterparties,
 }: {
-  onAdd: (e: LedgerEntry) => void;
+  /** Returns the new ledger entry's id, or null if the write failed. */
+  onAdd: (e: NewLedgerEntry) => Promise<number | null>;
   running: number;
   counterparties: { partyId: number; name: string; kind: string }[];
 }) {
+  const { fpoId } = useActiveFpo();
   const [desc, setDesc] = useState(""); const [amt, setAmt] = useState("");
   const [type, setType] = useState<"Income" | "Expense">("Income");
   const [cp, setCp] = useState<string>(OTHER);
   const [label, setLabel] = useState("");
+  const [crop, setCrop] = useState(""); const [qty, setQty] = useState("");
 
   const options = [OTHER, ...counterparties.map((c) => String(c.partyId))];
   const labelOf = (v: string) => {
@@ -1685,6 +1989,12 @@ function AddEntry({
     const c = counterparties.find((x) => String(x.partyId) === v);
     return c == null ? v : `${c.name} (${c.kind})`;
   };
+
+  // An Expense against a farmer-member is a produce purchase: it should show
+  // up on that farmer's own "My FPO" transaction history too, not just this
+  // ledger — see farmerRepository.recordFarmerTransaction.
+  const cpKind = counterparties.find((c) => String(c.partyId) === cp)?.kind;
+  const isMemberProcurement = type === "Expense" && cpKind === "farmer";
 
   return (
     <View style={s.form}>
@@ -1701,18 +2011,49 @@ function AddEntry({
         </Field>
       )}
       <Field label="Amount ₹"><Input value={amt} onChangeText={setAmt} placeholder="Amount ₹" keyboardType="numeric" /></Field>
+      {isMemberProcurement && (
+        <>
+          <Muted style={{ marginBottom: spacing.sm }}>
+            Expense against a member farmer — record the produce so it appears on their transaction history too.
+          </Muted>
+          <Field label="Crop"><Input value={crop} onChangeText={setCrop} placeholder="e.g. Onion" /></Field>
+          <Field label="Quantity (quintals)">
+            <Input value={qty} onChangeText={setQty} placeholder="e.g. 12" keyboardType="numeric" />
+          </Field>
+        </>
+      )}
       <Button full accent={colors.fpo}
-        onPress={() => {
+        onPress={async () => {
           const amount = Number(amt);
           if (!desc || !amount) return;
           // Running-balance computation preserved from the web app.
           const newBal = type === "Income" ? running + amount : running - amount;
-          onAdd({
+          const entryId = await onAdd({
             date: new Date().toISOString().slice(0, 10), desc, type, amount, balance: newBal,
             counterpartyPartyId: cp === OTHER ? null : Number(cp),
             counterpartyLabel: cp === OTHER ? (label || null) : null,
           });
-          setDesc(""); setAmt(""); setLabel("");
+          // Skip the farmer-transaction insert entirely if the ledger write
+          // itself failed — otherwise a farmer could end up with a produce
+          // transaction that has no bookkeeping entry behind it.
+          if (entryId != null && isMemberProcurement && crop.trim() !== "") {
+            const farmerId = await farmerRepo.getFarmerIdForParty(Number(cp));
+            if (farmerId != null) {
+              try {
+                await farmerRepo.recordFarmerTransaction(farmerId, fpoId, {
+                  date: new Date().toISOString().slice(0, 10),
+                  crop: crop.trim(),
+                  qtyQ: Number(qty) || 0,
+                  price: Number(qty) > 0 ? Math.round(amount / Number(qty)) : 0,
+                  amount,
+                  ledgerEntryId: entryId,
+                });
+              } catch (e) {
+                toast.error(describeWriteError(e, "Ledger entry saved, but could not record the farmer transaction."));
+              }
+            }
+          }
+          setDesc(""); setAmt(""); setLabel(""); setCrop(""); setQty("");
         }}>
         Add entry
       </Button>
@@ -1725,6 +2066,13 @@ const s = StyleSheet.create({
   itemCard: {
     borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
     backgroundColor: colors.card, padding: spacing.md, marginBottom: spacing.sm,
+  },
+  // Compact variant for dense, scrollable lists (the Inbox reply list) — same
+  // border/radius language, tighter padding and single-line text so many rows
+  // fit on screen instead of one tall block per reply.
+  compactCard: {
+    borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm,
+    backgroundColor: colors.card, padding: spacing.sm, marginBottom: 6,
   },
   oppCard: {
     borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,

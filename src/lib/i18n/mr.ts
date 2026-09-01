@@ -352,6 +352,10 @@ export const MR: Record<string, string> = {
   "Try again": "पुन्हा प्रयत्न करा",
   "This page didn't load": "हे पृष्ठ लोड झाले नाही",
   "No records yet.": "अद्याप कोणतीही नोंद नाही.",
+  "No new notifications.": "कोणतीही नवीन सूचना नाही.",
+  "No meetings logged yet.": "अजून कोणतीही बैठक नोंदवली नाही.",
+  "No ledger entries yet.": "अजून कोणतीही खाते नोंद नाही.",
+  "No completed orders match this filter.": "या फिल्टरशी जुळणारी कोणतीही पूर्ण ऑर्डर नाही.",
 
   // ===== Common buttons / actions =====
   "Cancel": "रद्द करा",

@@ -8,7 +8,7 @@ import {
 import { useSessionFarmer } from "../../lib/useSessionProfile";
 import { fpoRepo, marketRepo, membershipRepo } from "../../db";
 import { describeWriteError } from "../../db/authz";
-import type { MembershipRow } from "../../db/repositories/membershipRepository";
+import type { MembershipRow, MyMeetingInvitation } from "../../db/repositories/membershipRepository";
 import { useApp } from "../../lib/app-state";
 import { tr } from "../../lib/i18n";
 import { useDbQuery } from "../../db/useDbQuery";
@@ -103,6 +103,23 @@ function MarketInsights() {
 
   return (
     <>
+      <Card style={{ borderColor: colors.accent + "66", backgroundColor: "#FEF6EF" }}>
+        <CardHeader>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Lightbulb size={16} color={colors.accent} />
+            <CardTitle color={colors.accent}>Pro tip</CardTitle>
+          </View>
+        </CardHeader>
+        <CardContent>
+          <Text size="sm">
+            Turmeric demand from processors is high this season. Your soil suits it — consider a 0.5-acre trial. Expected realisation:
+            {" "}
+            <Text size="sm" weight="700">₹11,500/q</Text>
+            {" vs onion ₹1,820/q."}
+          </Text>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle color={colors.farmer}>FPO vs APMC · last 6 months</CardTitle>
@@ -195,23 +212,6 @@ function MarketInsights() {
           )}
         </CardContent>
       </Card>
-
-      <Card style={{ borderColor: colors.accent + "66", backgroundColor: "#FEF6EF" }}>
-        <CardHeader>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-            <Lightbulb size={16} color={colors.accent} />
-            <CardTitle color={colors.accent}>Pro tip</CardTitle>
-          </View>
-        </CardHeader>
-        <CardContent>
-          <Text size="sm">
-            Turmeric demand from processors is high this season. Your soil suits it — consider a 0.5-acre trial. Expected realisation:
-            {" "}
-            <Text size="sm" weight="700">₹11,500/q</Text>
-            {" vs onion ₹1,820/q."}
-          </Text>
-        </CardContent>
-      </Card>
     </>
   );
 }
@@ -219,26 +219,72 @@ function MarketInsights() {
 function MyFpoDetails() {
   const { lang } = useApp();
   const farmer = useSessionFarmer();
+  // A farmer can hold more than one active membership now — see membership 013.
+  // When they do, a picker chooses which FPO's details this view shows.
+  const activeMemberships = useDbQuery<MembershipRow[]>(
+    () => membershipRepo.listFarmerMemberships(farmer?.id ?? null), [farmer?.id], []);
+  const active = useMemo(
+    () => activeMemberships.filter((m) => m.status === "active"), [activeMemberships]);
+  const [selectedFpoId, setSelectedFpoId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (selectedFpoId != null && active.some((m) => m.fpoId === selectedFpoId)) return;
+    const fallback = active.find((m) => m.fpoId === farmer?.fpoId) ?? active[0];
+    if (fallback != null) setSelectedFpoId(fallback.fpoId);
+  }, [active, farmer?.fpoId, selectedFpoId]);
+
+  const membership = active.find((m) => m.fpoId === selectedFpoId) ?? null;
+
   const fpo = useDbQuery<FPO | null>(
-    () => (farmer?.fpoId != null ? fpoRepo.getFpoById(farmer.fpoId) : Promise.resolve(null)),
-    [farmer?.fpoId], null);
-  // Was hardcoded locals; now a per-FPO row in fpo_monthly_summary.
+    () => (selectedFpoId != null ? fpoRepo.getFpoById(selectedFpoId) : Promise.resolve(null)),
+    [selectedFpoId], null);
+  // Computed live from this farmer's own farmer_txns and the FPO's ledger —
+  // see fpoRepository.getMonthlySummary — not read out of a static seed row.
   const summary = useDbQuery<FpoMonthlySummary | null>(
-    () => (fpo != null ? fpoRepo.getMonthlySummary(fpo.id) : Promise.resolve(null)),
-    [fpo?.id], null);
+    () => (fpo != null && farmer != null ? fpoRepo.getMonthlySummary(fpo.id, farmer.id) : Promise.resolve(null)),
+    [fpo?.id, farmer?.id], null);
+  const meetings = useDbQuery<MyMeetingInvitation[]>(
+    () => membershipRepo.listMyMeetingInvitations(farmer?.id ?? null), [farmer?.id], []);
   const [open, setOpen] = useState(false);
 
   const monthSold = summary?.monthSoldQ ?? 0;
   const sellPrice = summary?.sellPrice ?? 0;
-  const onwardPrice = summary?.onwardPrice ?? 0;
+  const onwardTotal = summary?.onwardTotal ?? 0;
   const fpoProfit = summary?.fpoProfit ?? 0;
-  const profitShare = Math.round(((farmer?.sharePct ?? 0) / 100) * fpoProfit);
+  const sharePct = membership?.sharePct ?? 0;
+  const profitShare = Math.round((sharePct / 100) * fpoProfit);
   const sales = monthSold * sellPrice;
 
-  if (farmer == null || fpo == null) return null;
+  if (farmer == null || fpo == null || membership == null) return null;
 
   return (
     <>
+      {active.length > 1 && (
+        <Segmented
+          options={active.map((m) => m.fpoId)}
+          value={selectedFpoId ?? active[0].fpoId}
+          onChange={setSelectedFpoId}
+          accent={colors.farmer}
+          labelOf={(id) => active.find((m) => m.fpoId === id)?.fpoName ?? id}
+        />
+      )}
+
+      {meetings.length > 0 && (
+        <Card>
+          <CardHeader><CardTitle>Upcoming FPO meetings</CardTitle></CardHeader>
+          <CardContent>
+            {meetings.slice(0, 5).map((m) => (
+              <View key={m.meetingId} style={s.rowBetween}>
+                <View style={{ flex: 1 }}>
+                  <Text size="sm" weight="700">{m.agenda}</Text>
+                  <Muted>{`${m.fpoName} · ${m.date} ${m.time} · ${m.venue}`}</Muted>
+                </View>
+              </View>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       <Card style={{ borderColor: colors.farmer + "66", backgroundColor: colors.farmerSoft }}>
         <CardHeader>
           <Text size="xxs" weight="700" color={colors.farmer}>YOUR FPO — THIS MONTH</Text>
@@ -247,7 +293,7 @@ function MyFpoDetails() {
           <View style={{ flexDirection: "row", gap: spacing.md }}>
             <Placard label="Sales" value={`₹${inr(sales)}`} foot={`${monthSold} q · ₹${sellPrice}/q`} />
             <Placard label="My Share of Profit" value={`₹${inr(profitShare)}`}
-              foot={`${tr("Equity share:", lang)} ${farmer.sharePct}%`} highlight />
+              foot={`${tr("Equity share:", lang)} ${sharePct}%`} highlight />
           </View>
           <View style={{ alignItems: "flex-end", marginTop: spacing.md }}>
             <Button variant="outline" size="sm" accent={colors.farmer}
@@ -261,9 +307,9 @@ function MyFpoDetails() {
           {open && (
             <View style={s.breakdown}>
               <KV k="You sold to FPO" v={`${monthSold} q · ₹${sellPrice}/q`} />
-              <KV k="FPO sold onward" v={`${monthSold} q · ₹${onwardPrice}/q`} />
+              <KV k="FPO sold onward" v={`₹${inr(onwardTotal)}`} />
               <KV k="FPO net profit (month)" v={`₹${inr(fpoProfit)}`} />
-              <KV k="Your equity share" v={`${farmer.sharePct}%`} />
+              <KV k="Your equity share" v={`${sharePct}%`} />
               <View style={s.dashed} />
               <Text size="xxs" weight="700" color={colors.farmer}>Your profit share this month</Text>
               <Text size="xxl" weight="700" color={colors.farmer}>{`₹${inr(profitShare)}`}</Text>
@@ -278,6 +324,9 @@ function MyFpoDetails() {
       <Card>
         <CardHeader><CardTitle>Transaction history</CardTitle></CardHeader>
         <CardContent>
+          {active.length > 1 && (
+            <Muted style={{ marginBottom: spacing.sm }}>Across all your FPOs.</Muted>
+          )}
           <Table
             minWidth={430}
             columns={[
@@ -299,11 +348,11 @@ function MyFpoDetails() {
         <CardHeader><CardTitle>{`${tr("Membership", lang)} · ${tr(fpo.name, lang)}`}</CardTitle></CardHeader>
         <CardContent>
           <View style={s.statGrid}>
-            <Stat label="Shareholding" value={`${farmer.sharePct}%`} />
-            <Stat label="Share value" value={`₹${inr(farmer.sharePct * 12500)}`} />
+            <Stat label="Shareholding" value={`${sharePct}%`} />
+            <Stat label="Share value" value={`₹${inr(sharePct * 12500)}`} />
           </View>
           <View style={s.statGrid}>
-            <Stat label="Member since" value={farmer.memberSince ?? "—"} />
+            <Stat label="Member since" value={membership.joinedAt || "—"} />
             <Stat label="Active txns" value={`${farmer.txns.length}`} />
           </View>
         </CardContent>
@@ -329,7 +378,6 @@ function NearbyFpos() {
   /** The farmer's standing with one FPO, so the card can say what happened. */
   const standingWith = (fpoId: string) =>
     memberships.find((m) => m.fpoId === fpoId && m.status !== "rejected" && m.status !== "exited");
-  const belongsSomewhere = memberships.some((m) => m.status === "active");
 
   return (
     <>
@@ -364,10 +412,13 @@ function NearbyFpos() {
               {standing?.status === "active" && (
                 <Muted style={{ marginTop: spacing.md }}>You are a member of this FPO.</Muted>
               )}
+              {/* A farmer may belong to more than one FPO at once, so Apply stays
+                  available here even when they are already a member elsewhere —
+                  only a standing with *this* FPO (above) replaces the button. */}
               {standing == null && (
-                <Button full accent={colors.farmer} disabled={belongsSomewhere}
+                <Button full accent={colors.farmer}
                   onPress={() => setOpenFor(fpo.id)} style={{ marginTop: spacing.md }}>
-                  {belongsSomewhere ? "Already in an FPO" : "Apply for Membership"}
+                  Apply for Membership
                 </Button>
               )}
               {openFor === fpo.id && (

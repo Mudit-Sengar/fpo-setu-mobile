@@ -35,16 +35,16 @@ export function ConnectScreen() {
   useEffect(() => {
     const p = route.params?.sub;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing a nav-param deep link into local tab state; intentional (see navigation/types.ts SectionParams).
-    if (p === "buyers" || p === "farmers") setSub(p);
+    if (p === "buyers" || p === "farmers" || p === "network") setSub(p);
   }, [route.params?.sub, route.params?.req]);
 
   return (
     <RoleShell accent="farmer" screenName="Connect" onBack={goBack} onOpenFarmerProfile={() => nav.getParent()?.navigate("FarmerProfile" as never)}>
       <SectionCardRow>
-        <SectionCard active={sub === "buyers"} accent={colors.farmer} title="Connect with Buyers"
+        <SectionCard active={sub === "buyers"} accent={colors.farmer} title="Connect with Buyers" lines={3}
           onPress={() => setSub(sub === "buyers" ? null : "buyers")}
           icon={<Handshake size={22} color={sub === "buyers" ? "#fff" : colors.farmer} />} />
-        <SectionCard active={sub === "farmers"} accent={colors.farmer} title="Connect with Similar Farmers"
+        <SectionCard active={sub === "farmers"} accent={colors.farmer} title="Connect with Similar Farmers" lines={3}
           onPress={() => setSub(sub === "farmers" ? null : "farmers")}
           icon={<Users2 size={22} color={sub === "farmers" ? "#fff" : colors.farmer} />} />
         <SectionCard active={sub === "network"} accent={colors.farmer} title="My Network"

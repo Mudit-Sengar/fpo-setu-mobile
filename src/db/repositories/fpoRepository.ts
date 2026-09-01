@@ -1,8 +1,9 @@
 import { withDb, withWrite } from "../connection";
-import { requireProfile, type SessionContext } from "../authz";
+import { AuthzError, requireProfile, type SessionContext } from "../authz";
+import { countActiveMembers } from "./membershipRepository";
 import type {
   FPO, FpoCumulative, FpoMeeting, FpoMonthlySummary, FPOSupply,
-  LedgerEntry, MemberEngagement, OpportunityDetail, Tier,
+  LedgerEntry, MemberEngagement, NewLedgerEntry, OpportunityDetail, Tier,
 } from "../types";
 
 /** FPO entity + its child collections (supply, meetings, ledger, members). */
@@ -161,6 +162,23 @@ export async function insertMeeting(fpoId: string, m: FpoMeeting): Promise<numbe
   });
 }
 
+/**
+ * Deletes a logged meeting. `meeting_invitations` for it go with it —
+ * `ON DELETE CASCADE` in migration 006 — so no invitation is left pointing at a
+ * meeting that no longer exists.
+ */
+export async function deleteMeeting(ctx: SessionContext | null, fpoId: string, meetingId: number): Promise<void> {
+  const ownFpoId = requireProfile(ctx, "fpo");
+  if (ownFpoId !== fpoId) throw new AuthzError("That meeting belongs to another FPO.");
+
+  await withWrite("deleteMeeting", async (db) => {
+    const rows = (await db.execute(
+      "SELECT 1 AS ok FROM fpo_meetings WHERE id = ? AND fpo_id = ?;", [meetingId, fpoId])).rows ?? [];
+    if (rows.length === 0) throw new AuthzError("That meeting no longer exists.");
+    await db.execute("DELETE FROM fpo_meetings WHERE id = ?;", [meetingId]);
+  });
+}
+
 /* ------------------------------------------------------------ ledger ---- */
 
 export async function listLedger(fpoId: string): Promise<LedgerEntry[]> {
@@ -173,6 +191,7 @@ export async function listLedger(fpoId: string): Promise<LedgerEntry[]> {
          LEFT JOIN v_parties v ON v.party_id = l.counterparty_party_id
         WHERE l.fpo_id = ? ORDER BY l.id;`, [fpoId])).rows ?? [];
     return rows.map((r) => ({
+      id: Number(r.id),
       date: String(r.date),
       desc: String(r.description ?? ""),
       type: String(r.type) as LedgerEntry["type"],
@@ -187,9 +206,10 @@ export async function listLedger(fpoId: string): Promise<LedgerEntry[]> {
   });
 }
 
-export async function insertLedgerEntry(fpoId: string, e: LedgerEntry): Promise<void> {
-  await withWrite("insertLedgerEntry", (db) =>
-    db.execute(
+/** Inserts a ledger entry and returns its id, so a manual procurement entry can link the farmer transaction it implies — see `farmerRepository.recordFarmerTransaction`. */
+export async function insertLedgerEntry(fpoId: string, e: NewLedgerEntry): Promise<number> {
+  return withWrite("insertLedgerEntry", async (db) => {
+    await db.execute(
       `INSERT INTO ledger_entries
          (fpo_id, date, description, type, amount, balance,
           counterparty_party_id, counterparty_label, order_id, ref_id)
@@ -197,7 +217,121 @@ export async function insertLedgerEntry(fpoId: string, e: LedgerEntry): Promise<
       [fpoId, e.date, e.desc, e.type, e.amount, e.balance,
         e.counterpartyPartyId ?? null, e.counterpartyLabel ?? null,
         e.orderId ?? null, e.refId ?? null],
-    ));
+    );
+    const rows = (await db.execute(
+      "SELECT id FROM ledger_entries WHERE fpo_id = ? ORDER BY id DESC LIMIT 1;", [fpoId])).rows ?? [];
+    return Number(rows[0]?.id ?? 0);
+  });
+}
+
+/**
+ * Deletes one ledger entry.
+ *
+ * A manually-recorded farmer transaction posted alongside it goes too —
+ * `farmer_txns.ledger_entry_id ON DELETE CASCADE`, migration 014 — so the
+ * farmer's own history does not keep showing a produce transaction whose
+ * bookkeeping entry the FPO removed.
+ *
+ * Every later entry's stored `balance` included this one's amount, so the
+ * running total is replayed from scratch over what remains rather than left
+ * stale.
+ */
+export async function deleteLedgerEntry(ctx: SessionContext | null, fpoId: string, entryId: number): Promise<void> {
+  const ownFpoId = requireProfile(ctx, "fpo");
+  if (ownFpoId !== fpoId) throw new AuthzError("That ledger belongs to another FPO.");
+
+  await withWrite("deleteLedgerEntry", async (db) => {
+    const rows = (await db.execute(
+      "SELECT 1 AS ok FROM ledger_entries WHERE id = ? AND fpo_id = ?;", [entryId, fpoId])).rows ?? [];
+    if (rows.length === 0) throw new AuthzError("That ledger entry no longer exists.");
+
+    await db.execute("DELETE FROM ledger_entries WHERE id = ?;", [entryId]);
+
+    const remaining = (await db.execute(
+      "SELECT id, type, amount FROM ledger_entries WHERE fpo_id = ? ORDER BY id;", [fpoId])).rows ?? [];
+    let running = 0;
+    for (const r of remaining) {
+      running = String(r.type) === "Income" ? running + Number(r.amount) : running - Number(r.amount);
+      await db.execute("UPDATE ledger_entries SET balance = ? WHERE id = ?;", [running, Number(r.id)]);
+    }
+  });
+}
+
+/** The linked farmer transaction's crop/quantity for a ledger entry, if any — see migration 014. */
+export async function getFarmerTxnForLedgerEntry(
+  entryId: number,
+): Promise<{ crop: string; qtyQ: number } | null> {
+  return withDb("getFarmerTxnForLedgerEntry", async (db) => {
+    const rows = (await db.execute(
+      "SELECT crop, qty_q FROM farmer_txns WHERE ledger_entry_id = ? LIMIT 1;", [entryId])).rows ?? [];
+    if (rows.length === 0) return null;
+    return { crop: String(rows[0].crop ?? ""), qtyQ: Number(rows[0].qty_q ?? 0) };
+  });
+}
+
+export interface LedgerEntryEdit {
+  date: string;
+  desc: string;
+  type: "Income" | "Expense";
+  amount: number;
+  counterpartyPartyId?: number | null;
+  counterpartyLabel?: string | null;
+  /** Set to sync a linked farmer transaction's crop/quantity too (see migration 014). */
+  farmerCrop?: string;
+  farmerQtyQ?: number;
+}
+
+/**
+ * Edits a ledger entry in place.
+ *
+ * Every later entry's stored `balance` was computed against this one's old
+ * amount, so the running total is replayed from scratch afterwards — same as
+ * `deleteLedgerEntry`. If a farmer transaction was posted alongside this entry
+ * (migration 014), its date/amount/price move with the edit too, so the
+ * farmer's own "My FPO" transaction history and this-month totals stay in sync
+ * instead of drifting from what the FPO's books now say.
+ */
+export async function updateLedgerEntry(
+  ctx: SessionContext | null, fpoId: string, entryId: number, edit: LedgerEntryEdit,
+): Promise<void> {
+  const ownFpoId = requireProfile(ctx, "fpo");
+  if (ownFpoId !== fpoId) throw new AuthzError("That ledger belongs to another FPO.");
+
+  await withWrite("updateLedgerEntry", async (db) => {
+    const rows = (await db.execute(
+      "SELECT 1 AS ok FROM ledger_entries WHERE id = ? AND fpo_id = ?;", [entryId, fpoId])).rows ?? [];
+    if (rows.length === 0) throw new AuthzError("That ledger entry no longer exists.");
+
+    await db.execute(
+      `UPDATE ledger_entries SET date = ?, description = ?, type = ?, amount = ?,
+              counterparty_party_id = ?, counterparty_label = ? WHERE id = ?;`,
+      [edit.date, edit.desc, edit.type, edit.amount,
+        edit.counterpartyPartyId ?? null, edit.counterpartyLabel ?? null, entryId]);
+
+    const remaining = (await db.execute(
+      "SELECT id, type, amount FROM ledger_entries WHERE fpo_id = ? ORDER BY id;", [fpoId])).rows ?? [];
+    let running = 0;
+    for (const r of remaining) {
+      running = String(r.type) === "Income" ? running + Number(r.amount) : running - Number(r.amount);
+      await db.execute("UPDATE ledger_entries SET balance = ? WHERE id = ?;", [running, Number(r.id)]);
+    }
+
+    const linked = (await db.execute(
+      "SELECT qty_q FROM farmer_txns WHERE ledger_entry_id = ?;", [entryId])).rows ?? [];
+    if (linked.length > 0) {
+      const qty = edit.farmerQtyQ ?? Number(linked[0].qty_q ?? 0);
+      const price = qty > 0 ? Math.round(edit.amount / qty) : 0;
+      if (edit.farmerCrop != null) {
+        await db.execute(
+          "UPDATE farmer_txns SET date = ?, amount = ?, qty_q = ?, price = ?, crop = ? WHERE ledger_entry_id = ?;",
+          [edit.date, edit.amount, qty, price, edit.farmerCrop, entryId]);
+      } else {
+        await db.execute(
+          "UPDATE farmer_txns SET date = ?, amount = ?, qty_q = ?, price = ? WHERE ledger_entry_id = ?;",
+          [edit.date, edit.amount, qty, price, entryId]);
+      }
+    }
+  });
 }
 
 /* -------------------------------------------------------- engagement ---- */
@@ -223,8 +357,9 @@ export async function cumulativeFor(fpoId: string): Promise<FpoCumulative> {
     const cropRows = (await db.execute(
       "SELECT crop, acres FROM fpo_cropwise WHERE fpo_id = ? ORDER BY acres DESC;", [fpoId])).rows ?? [];
 
-    const fpoRows = (await db.execute("SELECT members FROM fpos WHERE id = ?;", [fpoId])).rows ?? [];
-    const totalMembers = Number(fpoRows[0]?.members ?? 0);
+    // Real active-membership count, not the frozen seeded `fpos.members` column
+    // — the same reason MeetingSection reads it this way.
+    const totalMembers = await countActiveMembers(fpoId);
 
     // Explicit crop-wise data exists for a couple of FPOs; the rest are derived
     // the same way the old cumulativeFor() helper did.
@@ -245,17 +380,59 @@ export async function cumulativeFor(fpoId: string): Promise<FpoCumulative> {
   });
 }
 
-export async function getMonthlySummary(fpoId: string): Promise<FpoMonthlySummary | null> {
+/**
+ * This farmer's "this month" standing with an FPO, computed live from the
+ * transaction data itself rather than read out of a frozen `fpo_monthly_summary`
+ * row (that table was seeded with the same four numbers for every FPO — see the
+ * removed insert in seed.ts).
+ *
+ * `monthSoldQ`/`sellPrice` are this farmer's own `farmer_txns` for the month —
+ * the same rows Digital Bookkeeping posts via `recordFarmerTransaction`, so an
+ * FPO logging, editing or deleting an entry changes what this returns.
+ * `fpoProfit` is the FPO's actual ledger (Income − Expense) for the month.
+ * `onwardPrice` is the FPO's average sale price on its own `orders` as seller
+ * this month, falling back to its all-time `avg_price_realisation` when it has
+ * not sold anything onward yet this month.
+ */
+export async function getMonthlySummary(
+  fpoId: string, farmerId: string | null,
+): Promise<FpoMonthlySummary | null> {
   return withDb("getMonthlySummary", async (db) => {
-    const rows = (await db.execute("SELECT * FROM fpo_monthly_summary WHERE fpo_id = ?;", [fpoId])).rows ?? [];
-    if (rows.length === 0) return null;
-    const r = rows[0];
-    return {
-      monthSoldQ: Number(r.month_sold_q ?? 0),
-      sellPrice: Number(r.sell_price ?? 0),
-      onwardPrice: Number(r.onward_price ?? 0),
-      fpoProfit: Number(r.fpo_profit ?? 0),
-    };
+    const farmerRows = farmerId == null ? [] : (await db.execute(
+      `SELECT COALESCE(SUM(t.qty_q), 0) AS qty, COALESCE(SUM(t.amount), 0) AS sales
+         FROM farmer_txns t
+         JOIN memberships m ON m.id = t.membership_id
+        WHERE m.fpo_id = ? AND t.farmer_id = ?
+          AND strftime('%Y-%m', t.date) = strftime('%Y-%m', 'now');`,
+      [fpoId, farmerId])).rows ?? [];
+    const monthSoldQ = Number(farmerRows[0]?.qty ?? 0);
+    const sales = Number(farmerRows[0]?.sales ?? 0);
+    const sellPrice = monthSoldQ > 0 ? Math.round(sales / monthSoldQ) : 0;
+
+    const profitRows = (await db.execute(
+      `SELECT COALESCE(SUM(CASE WHEN type = 'Income' THEN amount ELSE 0 END), 0) -
+              COALESCE(SUM(CASE WHEN type = 'Expense' THEN amount ELSE 0 END), 0) AS profit
+         FROM ledger_entries
+        WHERE fpo_id = ? AND strftime('%Y-%m', date) = strftime('%Y-%m', 'now');`,
+      [fpoId])).rows ?? [];
+    const fpoProfit = Number(profitRows[0]?.profit ?? 0);
+
+    const onwardRows = (await db.execute(
+      `SELECT COALESCE(SUM(o.qty), 0) AS qty, COALESCE(SUM(o.total_amount), 0) AS amt
+         FROM orders o
+         JOIN parties p ON p.id = o.seller_party_id
+        WHERE p.kind = 'fpo' AND p.entity_id = ?
+          AND o.status IN ('delivered', 'paid')
+          AND strftime('%Y-%m', COALESCE(o.paid_at, o.delivered_at, o.created_at)) = strftime('%Y-%m', 'now');`,
+      [fpoId])).rows ?? [];
+    const onwardQty = Number(onwardRows[0]?.qty ?? 0);
+    const onwardAmt = Number(onwardRows[0]?.amt ?? 0);
+    const onwardPrice = onwardQty > 0
+      ? Math.round(onwardAmt / onwardQty)
+      : Number((await db.execute(
+          "SELECT avg_price_realisation FROM fpos WHERE id = ?;", [fpoId])).rows?.[0]?.avg_price_realisation ?? 0);
+
+    return { monthSoldQ, sellPrice, onwardPrice, onwardTotal: onwardAmt, fpoProfit };
   });
 }
 

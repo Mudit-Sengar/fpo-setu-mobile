@@ -24,8 +24,17 @@ export async function listFpoSchemes(): Promise<Scheme[]> {
         eligibleTiers: tiers,
         minMembers: r.min_members == null ? undefined : Number(r.min_members),
         minCompliance: r.min_compliance == null ? undefined : Number(r.min_compliance),
+        url: r.url == null ? undefined : String(r.url),
       };
     }));
+  });
+}
+
+export async function getFpoSchemeUrl(name: string): Promise<string | undefined> {
+  return withDb("getFpoSchemeUrl", async (db) => {
+    const rows = (await db.execute("SELECT url FROM schemes_fpo WHERE name = ?;", [name])).rows ?? [];
+    const url = rows[0]?.url;
+    return url == null ? undefined : String(url);
   });
 }
 

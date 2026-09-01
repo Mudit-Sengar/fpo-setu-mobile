@@ -593,6 +593,7 @@ export interface Scheme {
   desc: string; eligibility: string;
   eligibleTiers: Tier[];
   minMembers?: number; minCompliance?: number;
+  url?: string;
 }
 export const GOVT_SCHEMES: Scheme[] = [
   { name: "Central Sector Scheme for Formation & Promotion of 10,000 FPOs (SFAC)",
@@ -626,6 +627,16 @@ export const GOVT_SCHEMES: Scheme[] = [
     eligibility: "Maharashtra FPC; compliance score ≥ 70; value-chain proposal.",
     eligibleTiers: ["Tier 1", "Tier 2"], minCompliance: 70 },
 ];
+
+// === Apply URLs for FPO schemes (same "Know More" / "Apply" pattern as farmer schemes) ===
+export const GOVT_SCHEME_URLS: Record<string, string> = {
+  "Central Sector Scheme for Formation & Promotion of 10,000 FPOs (SFAC)": "https://sfacindia.com/FPOScheme.aspx",
+  "Agriculture Infrastructure Fund (AIF)": "https://agriinfra.dac.gov.in/",
+  "NABARD PRODUCE Fund": "https://www.nabard.org/content1.aspx?catid=8&id=25",
+  "Equity Grant & Credit Guarantee Scheme (SFAC)": "https://sfacindia.com/EGCGscheme.aspx",
+  "Maharashtra State FPO Policy support": "https://krishi.maharashtra.gov.in/",
+  "SMART Project (MahaIT / World Bank)": "https://www.msamb.com/Site/SMART",
+};
 
 export function isSchemeEligible(s: Scheme, fpo: FPO): boolean {
   if (!s.eligibleTiers.includes(fpo.tier)) return false;

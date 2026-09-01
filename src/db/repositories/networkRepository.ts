@@ -58,6 +58,10 @@ export interface NotificationRow {
   createdAt: string;
   connectionId: number | null;
   conversationId: number | null;
+  requestId: number | null;
+  responseId: number | null;
+  orderId: number | null;
+  serviceRequestId: number | null;
 }
 
 /* --------------------------------------------------------------- reading -- */
@@ -165,6 +169,55 @@ export async function listMessages(
   });
 }
 
+export interface ConversationRow {
+  id: number;
+  otherPartyId: number;
+  otherName: string;
+  otherKind: string;
+  unreadCount: number;
+  lastMessageAt: string | null;
+  lastMessagePreview: string;
+}
+
+/**
+ * Every conversation the caller is part of, regardless of what opened it —
+ * an accepted connection, a reply to a posting (see requestRepository.respond),
+ * an FPO's outreach to a member, or a service request. `conversations` always
+ * has exactly two participants (nothing in this app opens a group thread), so
+ * "the other party" is just "whoever else is in conversation_participants" —
+ * one query serves every origin instead of one table per FK.
+ */
+export async function listMyConversations(ctx: SessionContext | null): Promise<ConversationRow[]> {
+  if (ctx == null) return [];
+  return withDb("listMyConversations", async (db) => {
+    const rows = (await db.execute(
+      `WITH me(id) AS (SELECT ?)
+       SELECT conv.id,
+              other.party_id AS other_party_id, other.name AS other_name, other.kind AS other_kind,
+              (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = conv.id AND m.sender_party_id <> me.id
+                 AND (cp.last_read_at IS NULL OR m.created_at > cp.last_read_at)) AS unread_count,
+              (SELECT MAX(created_at) FROM messages m WHERE m.conversation_id = conv.id) AS last_message_at,
+              (SELECT body FROM messages m WHERE m.conversation_id = conv.id
+                 ORDER BY created_at DESC, id DESC LIMIT 1) AS last_body
+         FROM conversations conv
+         CROSS JOIN me
+         JOIN conversation_participants cp ON cp.conversation_id = conv.id AND cp.party_id = me.id
+         JOIN conversation_participants op ON op.conversation_id = conv.id AND op.party_id <> me.id
+         JOIN v_parties other ON other.party_id = op.party_id
+        ORDER BY last_message_at IS NULL, last_message_at DESC, conv.id DESC;`,
+      [ctx.partyId])).rows ?? [];
+    return rows.map((r) => ({
+      id: Number(r.id),
+      otherPartyId: Number(r.other_party_id),
+      otherName: String(r.other_name ?? ""),
+      otherKind: String(r.other_kind ?? ""),
+      unreadCount: Number(r.unread_count ?? 0),
+      lastMessageAt: r.last_message_at == null ? null : String(r.last_message_at),
+      lastMessagePreview: String(r.last_body ?? ""),
+    }));
+  });
+}
+
 export async function listNotifications(
   ctx: SessionContext | null, onlyUnread = false,
 ): Promise<NotificationRow[]> {
@@ -184,6 +237,10 @@ export async function listNotifications(
       createdAt: String(r.created_at ?? ""),
       connectionId: r.connection_id == null ? null : Number(r.connection_id),
       conversationId: r.conversation_id == null ? null : Number(r.conversation_id),
+      requestId: r.request_id == null ? null : Number(r.request_id),
+      responseId: r.response_id == null ? null : Number(r.response_id),
+      orderId: r.order_id == null ? null : Number(r.order_id),
+      serviceRequestId: r.service_request_id == null ? null : Number(r.service_request_id),
     }));
   });
 }

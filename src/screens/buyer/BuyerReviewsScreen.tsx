@@ -13,7 +13,7 @@ import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle, Field, Input,
   Muted, Select, StarRating, Text, toast,
 } from "../../components/ui";
-import { ModeToggle, Stepper } from "../../features/buyer-shared";
+import { ModeToggle } from "../../features/buyer-shared";
 import { OrdersPanel } from "../../features/orders";
 
 /**
@@ -72,7 +72,7 @@ export function BuyerReviewsScreen() {
   }
 
   return (
-    <RoleShell accent="buyer" screenName="Reviews & Feedback" header={<Stepper />}>
+    <RoleShell accent="buyer" screenName="Reviews & Feedback">
       <ModeToggle />
 
       <Card>

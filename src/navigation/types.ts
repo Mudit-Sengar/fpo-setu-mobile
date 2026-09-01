@@ -29,7 +29,7 @@ export type FarmerTabParamList = {
   FarmerHome: undefined;                                    // web "/farmer/"
   MyFpo: SectionParams<"market" | "fpo" | "near">;          // web "/farmer/my-fpo" (+ ?sub= deep link)
   Learn: SectionParams<"courses" | "stories">;              // web "/farmer/learn"
-  Connect: SectionParams<"buyers" | "farmers">;             // web "/farmer/connect"
+  Connect: SectionParams<"buyers" | "farmers" | "network">; // web "/farmer/connect"
   Schemes: undefined;                                       // web "/farmer/schemes"
 };
 
@@ -45,5 +45,6 @@ export type FpoStackParamList = {
 export type BuyerTabParamList = {
   BuyerHome: undefined;      // web "/buyer/"
   BuyerMatching: undefined;  // web "/buyer/matching"
+  BuyerMessages: undefined;  // accepted connections + their message threads
   BuyerReviews: undefined;   // web "/buyer/reviews"
 };

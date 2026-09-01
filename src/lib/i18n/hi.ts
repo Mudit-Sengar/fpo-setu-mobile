@@ -351,6 +351,10 @@ export const HI: Record<string, string> = {
   "Try again": "पुनः प्रयास करें",
   "This page didn't load": "यह पृष्ठ लोड नहीं हुआ",
   "No records yet.": "अभी तक कोई रिकॉर्ड नहीं.",
+  "No new notifications.": "कोई नई सूचना नहीं.",
+  "No meetings logged yet.": "अभी तक कोई बैठक दर्ज नहीं हुई.",
+  "No ledger entries yet.": "अभी तक कोई लेखा प्रविष्टि नहीं.",
+  "No completed orders match this filter.": "इस फ़िल्टर से कोई पूर्ण ऑर्डर मेल नहीं खाता.",
 
   // ===== Common buttons / actions =====
   "Cancel": "रद्द करें",

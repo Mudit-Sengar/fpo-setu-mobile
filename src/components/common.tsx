@@ -8,6 +8,14 @@ import { tr } from "../lib/i18n";
 import { colors, radius, spacing } from "../theme";
 import { Muted, Text } from "./ui";
 
+/**
+ * Per-line height reserved for a multi-line SectionCard title, sized for
+ * the 1.3x max accessibility font scale (fontSize.xs=12 * 1.3 * lineHeight
+ * multiplier 1.4 ≈ 22px), so the reserved box never needs to grow from
+ * content at any supported font scale — see SectionCard's `lines` prop.
+ */
+const MAX_SCALE_LINE_HEIGHT = 22;
+
 /** The "Tap one of the buttons above…" empty state used by every chip screen. */
 export function EmptyHint({ children }: { children: ReactNode }) {
   return (
@@ -152,8 +160,31 @@ export function Segmented<T extends string>({
  * shared so the Learn screen presents its sections identically.
  */
 export function SectionCard({
-  title, icon, active, onPress, accent,
-}: { title: string; icon: ReactNode; active: boolean; onPress: () => void; accent: string }) {
+  title, icon, active, onPress, accent, lines = 1,
+}: {
+  title: string; icon: ReactNode; active: boolean; onPress: () => void; accent: string;
+  /**
+   * Titles too long for one line ("Connect with Similar Farmers",
+   * "Market-Linked Growth Planning") pass `lines={3}` to show the full text
+   * instead of truncating. Wrapped in a fixed-height box below — reserving
+   * the height for that many lines up front, rather than letting it grow
+   * from content, is what avoids the layout-shift bug described below.
+   * 3, not 2, because at the 1.3x max accessibility font scale (see
+   * DEFAULT_MAX_FONT_SCALE in Text.tsx) these titles wrap to 3 lines, not 2 —
+   * reserving only 2 there re-truncates exactly the titles this prop exists
+   * to show in full.
+   */
+  lines?: 1 | 2 | 3;
+}) {
+  const titleNode = (
+    <Text
+      size="xs" weight="700" center
+      numberOfLines={lines}
+      color={active ? "#ffffff" : colors.foreground}
+    >
+      {title}
+    </Text>
+  );
   return (
     <Pressable
       onPress={onPress}
@@ -167,12 +198,13 @@ export function SectionCard({
     >
       {icon}
       {/*
-        numberOfLines={1}: a wrapped 2-line title makes Fabric's flexWrap
-        container miscalculate that line's height, shifting the icon+text
-        block within its own card AND every row below (including a lone
-        full-width card and any EmptyHint after it) can end up overlapping.
-        Forcing a single line removes the wrap entirely, so it can't trigger
-        that container miscalculation for any SectionCard, on any screen.
+        numberOfLines={1} (the default): a wrapped 2-line title makes Fabric's
+        flexWrap container miscalculate that line's height, shifting the
+        icon+text block within its own card AND every row below (including a
+        lone full-width card and any EmptyHint after it) can end up
+        overlapping. Forcing a single line removes the wrap entirely, so it
+        can't trigger that container miscalculation for any SectionCard, on
+        any screen.
 
         adjustsFontSizeToFit + minimumFontScale used to handle overlong
         titles by shrinking them instead of truncating — but combined with
@@ -181,14 +213,14 @@ export function SectionCard({
         word instead of shrinking or ellipsizing. Plain numberOfLines={1}
         falls back to RN's default tail-ellipsis, which reliably shows a
         truncated-but-legible label instead.
+
+        `lines={2|3}`: reserves a fixed height for that many lines (sized for
+        the max accessibility font scale, see DEFAULT_MAX_FONT_SCALE in
+        Text.tsx) instead of one. Because the box's height never depends on
+        how the text actually wraps, it sidesteps the Fabric remeasurement
+        bug above while still showing the complete title.
       */}
-      <Text
-        size="xs" weight="700" center
-        numberOfLines={1}
-        color={active ? "#ffffff" : colors.foreground}
-      >
-        {title}
-      </Text>
+      {lines > 1 ? <View style={{ height: MAX_SCALE_LINE_HEIGHT * lines, justifyContent: "center" }}>{titleNode}</View> : titleNode}
     </Pressable>
   );
 }

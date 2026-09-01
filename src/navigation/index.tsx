@@ -5,10 +5,10 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
-  Building2, GraduationCap, Handshake, Home, Landmark, ShoppingBag, Star, Users,
+  Building2, GraduationCap, Handshake, Home, Landmark, MessageCircle, ShoppingBag, Star, Users,
 } from "lucide-react-native";
 import { useApp } from "../lib/app-state";
-import { colors } from "../theme";
+import { colors, fontSize } from "../theme";
 import { Text } from "../components/ui";
 import type {
   BuyerTabParamList, FarmerStackParamList, FarmerTabParamList, FpoStackParamList, RootStackParamList,
@@ -29,6 +29,7 @@ import { FpoCapacityScreen } from "../screens/fpo/FpoCapacityScreen";
 import { FpoMyScreen } from "../screens/fpo/FpoMyScreen";
 import { BuyerHomeScreen } from "../screens/buyer/BuyerHomeScreen";
 import { BuyerMatchingScreen } from "../screens/buyer/BuyerMatchingScreen";
+import { BuyerMessagesScreen } from "../screens/buyer/BuyerMessagesScreen";
 import { BuyerReviewsScreen } from "../screens/buyer/BuyerReviewsScreen";
 import { AdminScreen } from "../screens/admin/AdminScreen";
 
@@ -38,7 +39,7 @@ const FarmerTabs = createBottomTabNavigator<FarmerTabParamList>();
 const FpoStack = createNativeStackNavigator<FpoStackParamList>();
 const BuyerTabs = createBottomTabNavigator<BuyerTabParamList>();
 
-const tabLabelStyle = { fontSize: 10, fontWeight: "600" as const };
+const tabLabelStyle = { fontSize: fontSize.xxs, fontWeight: "600" as const };
 
 /**
  * Custom tab-bar label renderer. React Navigation's own `title`/default label
@@ -46,10 +47,16 @@ const tabLabelStyle = { fontSize: 10, fontWeight: "600" as const };
  * tr()-backed <Text> wrapper — so a plain string `title` never translates. This
  * render prop hands the label to the app's own <Text> instead, which already
  * reads the active language from useApp() and translates automatically.
+ *
+ * `minWidth` rather than a fixed `width`: at larger Android system font sizes
+ * (capped at 1.3x by <Text>'s own maxFontSizeMultiplier, but still bigger than
+ * base) a two-line label needs more room than the base-size label did — a
+ * fixed width clipped it. The tab item itself still constrains the max width
+ * via flex layout, so this only ever grows, never overflows into a sibling tab.
  */
 function tabLabel(text: string) {
   return ({ color }: { color: string }) => (
-    <Text size={9} weight="600" color={color} center numberOfLines={2} style={{ width: 72 }}>
+    <Text size="xxs" weight="600" color={color} center numberOfLines={2} style={{ minWidth: 60 }}>
       {text}
     </Text>
   );
@@ -60,13 +67,16 @@ function tabLabel(text: string) {
  * labels sit underneath Android's gesture-navigation pill (and the iOS home
  * indicator). Hardcoding height/paddingBottom overrides React Navigation's
  * built-in inset handling, so we add it back explicitly.
+ *
+ * `minHeight`, not `height` — a two-line label at a larger system font size
+ * needs more vertical room than the base case, and a fixed height clipped it.
  */
 function useTabBarStyle() {
   const insets = useSafeAreaInsets();
   return {
     borderTopColor: colors.border,
     backgroundColor: colors.background,
-    height: 58 + insets.bottom,
+    minHeight: 58 + insets.bottom,
     paddingBottom: insets.bottom + 6,
     paddingTop: 6,
   };
@@ -156,6 +166,8 @@ function BuyerNavigator() {
         options={{ title: "Profile & Order", tabBarLabel: tabLabel("Profile & Order"), tabBarIcon: ({ color }) => <ShoppingBag size={20} color={color} /> }} />
       <BuyerTabs.Screen name="BuyerMatching" component={BuyerMatchingScreen}
         options={{ title: "Connect", tabBarLabel: tabLabel("Connect"), tabBarIcon: ({ color }) => <Handshake size={20} color={color} /> }} />
+      <BuyerTabs.Screen name="BuyerMessages" component={BuyerMessagesScreen}
+        options={{ title: "Messages", tabBarLabel: tabLabel("Messages"), tabBarIcon: ({ color }) => <MessageCircle size={20} color={color} /> }} />
       <BuyerTabs.Screen name="BuyerReviews" component={BuyerReviewsScreen}
         options={{ title: "Reviews", tabBarLabel: tabLabel("Reviews"), tabBarIcon: ({ color }) => <Star size={20} color={color} /> }} />
     </BuyerTabs.Navigator>

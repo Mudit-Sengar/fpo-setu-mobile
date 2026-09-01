@@ -23,6 +23,15 @@ export interface TextProps extends RNTextProps {
   noTranslate?: boolean;
 }
 
+// Caps how far Android's system "Font size" + "Display size" accessibility
+// settings can scale this text. Without a cap, a phone set to the largest
+// accessibility font size can grow text past 2x, which overruns every
+// fixed-width/fixed-height container in the app. 1.3x still gives a real
+// accessibility benefit while staying inside what the layouts below were
+// built to tolerate. Screens that truly need the OS default can still pass
+// `maxFontSizeMultiplier` through `...rest`.
+const DEFAULT_MAX_FONT_SCALE = 1.3;
+
 export function Text({
   children,
   size = "base",
@@ -31,6 +40,7 @@ export function Text({
   center,
   noTranslate,
   style,
+  maxFontSizeMultiplier = DEFAULT_MAX_FONT_SCALE,
   ...rest
 }: TextProps) {
   const { lang } = useApp();
@@ -45,7 +55,12 @@ export function Text({
 
   return (
     <RNText
+      maxFontSizeMultiplier={maxFontSizeMultiplier}
       style={[
+        // RN scales a numeric lineHeight together with fontSize under Android's
+        // font-size accessibility setting, so this stays proportional as the
+        // system font grows — `maxFontSizeMultiplier` above is what keeps that
+        // growth from overrunning fixed-size containers elsewhere in the app.
         { fontSize: resolvedSize, color, lineHeight: Math.round(resolvedSize * 1.4) },
         weight ? { fontWeight: weight } : null,
         center ? { textAlign: "center" as const } : null,

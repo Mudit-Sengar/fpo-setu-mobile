@@ -3,7 +3,9 @@ import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { MessageCircle, Send, UserPlus } from "lucide-react-native";
 import { networkRepo } from "../db";
 import { describeWriteError } from "../db/authz";
-import type { ConnectionRow, MessageRow, RelationType } from "../db/repositories/networkRepository";
+import type {
+  ConnectionRow, ConversationRow, MessageRow, NotificationRow, RelationType,
+} from "../db/repositories/networkRepository";
 import { useDbQuery } from "../db/useDbQuery";
 import { useApp } from "../lib/app-state";
 import { tr } from "../lib/i18n";
@@ -37,22 +39,19 @@ const KIND_LABEL: Record<string, string> = {
   service_provider: "Advisor",
 };
 
-export function ConnectionsPanel({ accent }: { accent: string }) {
-  const { session, lang } = useApp();
+/** Query + mutations shared by the pending and active connection panels. */
+function useConnectionsData() {
+  const { session } = useApp();
   const connections = useDbQuery<ConnectionRow[]>(
     () => networkRepo.listConnections(session), [session?.partyId], []);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [openThread, setOpenThread] = useState<number | null>(null);
 
-  async function decide(c: ConnectionRow, decision: "accepted" | "rejected" | "blocked") {
+  async function decide(c: ConnectionRow, decision: "accepted" | "rejected" | "blocked", onDone: (c: ConnectionRow) => void) {
     if (busyId != null) return;
     setBusyId(c.id);
     try {
       await networkRepo.decideConnection(session, c.id, decision);
-      toast.success(
-        decision === "accepted" ? `${tr("Connected with", lang)} ${c.otherName}.`
-        : decision === "blocked" ? `${tr("Blocked", lang)} ${c.otherName}.`
-        : `${tr("Declined", lang)} ${c.otherName}.`);
+      onDone(c);
     } catch (e) {
       toast.error(describeWriteError(e, "Could not record that decision."));
     } finally {
@@ -73,9 +72,22 @@ export function ConnectionsPanel({ accent }: { accent: string }) {
     }
   }
 
+  return { connections, busyId, decide, withdraw };
+}
+
+/**
+ * The request side of Connect: incoming requests waiting on a decision, ones
+ * the caller sent and is waiting on, and closed history. Shown on the
+ * "Connect" surface of every persona (Farmer's My Network, FPO's Inbox,
+ * Buyer/Supplier's Connect tab) — the counterpart to `ActiveConversationsPanel`
+ * below, which is where an *accepted* connection's chat lives.
+ */
+export function PendingConnectionsPanel({ accent }: { accent: string }) {
+  const { lang } = useApp();
+  const { connections, busyId, decide, withdraw } = useConnectionsData();
+
   const incoming = connections.filter((c) => c.status === "pending" && !c.outgoing);
   const outgoing = connections.filter((c) => c.status === "pending" && c.outgoing);
-  const accepted = connections.filter((c) => c.status === "accepted");
   const closed = connections.filter((c) => ["rejected", "withdrawn", "blocked"].includes(c.status));
 
   return (
@@ -101,55 +113,18 @@ export function ConnectionsPanel({ accent }: { accent: string }) {
               {c.message !== "" && <Text size="sm" style={{ marginTop: spacing.sm }}>{`"${c.message}"`}</Text>}
               <View style={s.actions}>
                 <Button size="sm" accent={accent} disabled={busyId === c.id}
-                  onPress={() => decide(c, "accepted")}>
+                  onPress={() => decide(c, "accepted", (x) => toast.success(`${tr("Connected with", lang)} ${x.otherName}.`))}>
                   Accept
                 </Button>
                 <Button size="sm" variant="outline" accent={accent} disabled={busyId === c.id}
-                  onPress={() => decide(c, "rejected")}>
+                  onPress={() => decide(c, "rejected", (x) => toast.success(`${tr("Declined", lang)} ${x.otherName}.`))}>
                   Decline
                 </Button>
                 <Button size="sm" variant="ghost" accent={colors.destructive} disabled={busyId === c.id}
-                  onPress={() => decide(c, "blocked")}>
+                  onPress={() => decide(c, "blocked", (x) => toast.success(`${tr("Blocked", lang)} ${x.otherName}.`))}>
                   Block
                 </Button>
               </View>
-            </View>
-          ))}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <View style={s.titleRow}>
-            <MessageCircle size={16} color={accent} />
-            <CardTitle>{`${tr("Your connections", lang)} (${accepted.length})`}</CardTitle>
-          </View>
-        </CardHeader>
-        <CardContent>
-          {accepted.length === 0 && (
-            <Muted>No connections yet. Connect from a matching screen and they appear here.</Muted>
-          )}
-          {accepted.map((c) => (
-            <View key={c.id} style={s.card}>
-              <View style={s.rowBetween}>
-                <View style={{ flex: 1 }}>
-                  <Text size="sm" weight="700">{c.otherName}</Text>
-                  <Muted>{`${tr(KIND_LABEL[c.otherKind] ?? c.otherKind, lang)} · ${tr(RELATION_LABEL[c.relationType], lang)}`}</Muted>
-                </View>
-                {c.unreadCount > 0 && (
-                  <Badge color="#ffffff" bg={accent}>{`${c.unreadCount} ${tr("new", lang)}`}</Badge>
-                )}
-              </View>
-              {c.conversationId != null && (
-                <Button variant="ghost" size="sm" accent={accent}
-                  style={{ alignSelf: "flex-start", paddingHorizontal: 0 }}
-                  onPress={() => setOpenThread(openThread === c.conversationId ? null : c.conversationId)}>
-                  {openThread === c.conversationId ? "Hide messages" : "Messages"}
-                </Button>
-              )}
-              {c.conversationId != null && openThread === c.conversationId && (
-                <Thread conversationId={c.conversationId} accent={accent} />
-              )}
             </View>
           ))}
         </CardContent>
@@ -192,6 +167,78 @@ export function ConnectionsPanel({ accent }: { accent: string }) {
           </CardContent>
         </Card>
       )}
+    </>
+  );
+}
+
+/**
+ * The message side of Connect: every conversation the caller is part of,
+ * whatever opened it — an accepted connection, a reply to a posting, an
+ * FPO's outreach to a member, or a service request (see
+ * networkRepository.listMyConversations) — each a compact card that expands
+ * into its `Thread`. This is what Buyer/Supplier's new Messages tab renders
+ * (see BuyerMessagesScreen); Farmer's My Network and FPO's Inbox render it
+ * too, alongside `PendingConnectionsPanel`, via `ConnectionsPanel` below.
+ */
+export function ActiveConversationsPanel({ accent }: { accent: string }) {
+  const { session, lang } = useApp();
+  const conversations = useDbQuery<ConversationRow[]>(
+    () => networkRepo.listMyConversations(session), [session?.partyId], []);
+  const [openThread, setOpenThread] = useState<number | null>(null);
+
+  return (
+    <Card>
+      <CardHeader>
+        <View style={s.titleRow}>
+          <MessageCircle size={16} color={accent} />
+          <CardTitle>{`${tr("Messages", lang)} (${conversations.length})`}</CardTitle>
+        </View>
+      </CardHeader>
+      <CardContent>
+        {conversations.length === 0 && (
+          <Muted>No conversations yet. Connect or reply from a matching screen and they appear here.</Muted>
+        )}
+        {/* Capped to roughly 2-3 rows of visible height so a long conversation
+            list scrolls in place instead of taking over the whole screen. An
+            open thread grows past the cap on purpose, so its messages and
+            composer stay reachable. */}
+        <ScrollView style={openThread != null ? undefined : s.conversationScroll} nestedScrollEnabled>
+          {conversations.map((c) => (
+            <View key={c.id} style={s.compactCard}>
+              <Pressable
+                style={s.rowBetween}
+                onPress={() => setOpenThread(openThread === c.id ? null : c.id)}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text size="sm" weight="700" numberOfLines={1}>{c.otherName}</Text>
+                  <Muted numberOfLines={1}>
+                    {`${tr(KIND_LABEL[c.otherKind] ?? c.otherKind, lang)}${c.lastMessagePreview !== "" ? ` · ${c.lastMessagePreview}` : ""}`}
+                  </Muted>
+                </View>
+                {c.unreadCount > 0 && (
+                  <Badge color="#ffffff" bg={accent}>{`${c.unreadCount} ${tr("new", lang)}`}</Badge>
+                )}
+              </Pressable>
+              {openThread === c.id && <Thread conversationId={c.id} accent={accent} />}
+            </View>
+          ))}
+        </ScrollView>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Both panels back-to-back — the combined surface Farmer's My Network and
+ * FPO's Inbox already showed before Buyer/Supplier got a separate Messages
+ * tab. Unchanged in substance: same data, same actions, just split into two
+ * reusable pieces underneath.
+ */
+export function ConnectionsPanel({ accent }: { accent: string }) {
+  return (
+    <>
+      <PendingConnectionsPanel accent={accent} />
+      <ActiveConversationsPanel accent={accent} />
     </>
   );
 }
@@ -266,6 +313,13 @@ export function useUnreadCount(): number {
     () => networkRepo.countUnreadNotifications(session), [session?.partyId], 0);
 }
 
+/** The signed-in party's notification feed, newest first. */
+export function useNotifications(): NotificationRow[] {
+  const { session } = useApp();
+  return useDbQuery<NotificationRow[]>(
+    () => networkRepo.listNotifications(session), [session?.partyId], []);
+}
+
 const s = StyleSheet.create({
   titleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
@@ -273,6 +327,15 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
     backgroundColor: colors.card, padding: spacing.md, marginBottom: spacing.sm,
   },
+  // Compact variant for the "your connections" list — smaller padding and
+  // single-line text so many rows fit on screen, matching the FPO Inbox's
+  // reply cards (see fpo-sections.tsx s.compactCard).
+  compactCard: {
+    borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm,
+    backgroundColor: colors.card, padding: spacing.sm, marginBottom: 6,
+  },
+  // ~2-3 conversation rows visible at once — see the comment at its usage.
+  conversationScroll: { maxHeight: 220 },
   actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.md, flexWrap: "wrap" },
   thread: {
     borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,

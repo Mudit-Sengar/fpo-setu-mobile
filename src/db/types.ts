@@ -74,6 +74,8 @@ export interface FpoMonthlySummary {
   monthSoldQ: number;
   sellPrice: number;
   onwardPrice: number;
+  /** Real total realised on the FPO's onward sale this month — SUM(orders.total_amount), not qty × onwardPrice. */
+  onwardTotal: number;
   fpoProfit: number;
 }
 
@@ -85,6 +87,7 @@ export interface FpoMonthlySummary {
  * `counterpartyLabel` carries the cases that genuinely name no party.
  */
 export interface LedgerEntry {
+  id: number;
   date: string;
   desc: string;
   type: "Income" | "Expense";
@@ -97,6 +100,9 @@ export interface LedgerEntry {
   orderId?: number | null;
   refId?: string;
 }
+
+/** Shape `fpoRepository.insertLedgerEntry` takes — everything but the id it assigns and the name it derives on read. */
+export type NewLedgerEntry = Omit<LedgerEntry, "id" | "counterpartyName">;
 
 /** Kinds stored in the `lookup_values` table. */
 export type LookupKind = "commodity" | "season" | "state" | "certification" | "crop";

@@ -34,11 +34,6 @@ export function FpoHomeScreen() {
     <RoleShell
       accent="fpo"
       screenName="FPO Home"
-      header={
-        <View style={s.headerBand}>
-          <Text size="sm" weight="700" color={colors.fpo}>{fpoName}</Text>
-        </View>
-      }
     >
       <View>
         <Text size="xl" weight="600">
@@ -72,7 +67,6 @@ export function FpoHomeScreen() {
 }
 
 const s = StyleSheet.create({
-  headerBand: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   tiles: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md },
   notice: {
     flexDirection: "row", alignItems: "center", gap: spacing.sm,

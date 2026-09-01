@@ -1,12 +1,12 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { ArrowDown, Layers, MapPin, Network, Package, Star, Users } from "lucide-react-native";
-import { farmerRepo, fpoRepo, networkRepo, readinessRepo, requestRepo, reviewRepo } from "../../db";
+import { farmerRepo, fpoRepo, marketRepo, networkRepo, readinessRepo, requestRepo, reviewRepo } from "../../db";
 import { describeWriteError } from "../../db/authz";
 import type { RequestRow } from "../../db/repositories/requestRepository";
 import { useDbQuery } from "../../db/useDbQuery";
-import type { FPO } from "../../db/types";
+import type { Buyer, FPO } from "../../db/types";
 import type { PeerFarmer } from "../../db/repositories/farmerRepository";
 import { useApp } from "../../lib/app-state";
 import { tr } from "../../lib/i18n";
@@ -19,8 +19,8 @@ import {
   Muted, Select, Text, toast,
 } from "../../components/ui";
 import { Meta } from "../../components/common";
-import { ModeToggle, Stepper, useBuyerMode } from "../../features/buyer-shared";
-import { ConnectionsPanel } from "../../features/connections";
+import { ModeToggle, useBuyerMode } from "../../features/buyer-shared";
+import { PendingConnectionsPanel } from "../../features/connections";
 
 /**
  * Ported from the web app's src/routes/buyer.matching.tsx.
@@ -37,10 +37,12 @@ import { ConnectionsPanel } from "../../features/connections";
 export function BuyerMatchingScreen() {
   const { mode } = useBuyerMode();
   return (
-    <RoleShell accent="buyer" screenName="Connect with Farmer or FPO" header={<Stepper />}>
+    <RoleShell accent="buyer" screenName="Connect with Farmer or FPO">
       <ModeToggle />
       {mode === "buyer" ? <BuyerMatching /> : <SupplierMatching />}
-      <ConnectionsPanel accent={colors.buyer} />
+      {/* Accepted connections and their threads now live on the Messages tab —
+          this stays the discovery/request surface. */}
+      <PendingConnectionsPanel accent={colors.buyer} />
     </RoleShell>
   );
 }
@@ -58,12 +60,25 @@ interface Candidate {
 function BuyerMatching() {
   const { session, lang } = useApp();
   const fpos = useDbQuery<FPO[]>(() => fpoRepo.listFpos(), [], []);
+  // The buyer's own registered commodity interests, so an FPO's matching
+  // posting can surface without the buyer manually picking it first.
+  const myProfile = useDbQuery<Buyer | null>(
+    () => (session?.activeRole === "buyer" ? marketRepo.getBuyerById(session.profileId) : Promise.resolve(null)),
+    [session?.profileId, session?.activeRole], null);
 
   const [latest, setLatest] = useState<RequestRow | null>(null);
   const [commodity, setCommodity] = useState(COMMODITIES[0]);
+  const [commodityDefaulted, setCommodityDefaulted] = useState(false);
   const [grade, setGrade] = useState("A");
   const [qty, setQty] = useState("250");
   const [busyId, setBusyId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (commodityDefaulted || latest != null || myProfile == null) return;
+    const first = myProfile.commodities[0];
+    if (first != null) setCommodity(first);
+    setCommodityDefaulted(true);
+  }, [commodityDefaulted, latest, myProfile]);
 
   // Reloads on focus so a demand just posted on the Home tab is picked up — that
   // form navigates straight here after posting.
@@ -153,6 +168,24 @@ function BuyerMatching() {
     }
   }
 
+  async function connectToFpo(c: Candidate) {
+    if (busyId != null) return;
+    setBusyId(c.request.id);
+    try {
+      await networkRepo.requestConnection(session, {
+        otherPartyId: c.request.authorPartyId,
+        relationType: "trade",
+        message: `We deal in ${c.request.item} and would like to connect.`,
+        openThread: true,
+      });
+      toast.success(`${tr("Connection request sent to", lang)} ${c.request.authorName}.`);
+    } catch (e) {
+      toast.error(describeWriteError(e, "Could not send that request."));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   // Farmers who grow this commodity, with the party id a connection needs.
   const farmerMatches = useDbQuery<PeerFarmer[]>(
     () => farmerRepo.listPeerFarmers(commodity, null, latest?.district ?? null),
@@ -209,7 +242,7 @@ function BuyerMatching() {
           <CardContent>
             {fitsSingle.slice(0, 4).map((c) => (
               <FpoCard key={c.request.id} c={c} busy={busyId === c.request.id}
-                onRespond={() => respondTo(c)} />
+                onRespond={() => respondTo(c)} onConnect={() => connectToFpo(c)} />
             ))}
           </CardContent>
         </Card>
@@ -411,7 +444,9 @@ function SupplierMatching() {
   );
 }
 
-function FpoCard({ c, busy, onRespond }: { c: Candidate; busy: boolean; onRespond: () => void }) {
+function FpoCard({
+  c, busy, onRespond, onConnect,
+}: { c: Candidate; busy: boolean; onRespond: () => void; onConnect: () => void }) {
   const { lang } = useApp();
   const { request, fpo, breakdown, rep } = c;
   const replied = request.responseCount > 0;
@@ -445,10 +480,13 @@ function FpoCard({ c, busy, onRespond }: { c: Candidate; busy: boolean; onRespon
         )}
       </View>
 
-      <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
+      <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md, flexWrap: "wrap" }}>
         <Button size="sm" variant="outline" accent={colors.buyer}
           onPress={() => toast.message(`${request.authorName} — ${fpo?.tagline ?? request.item}`)}>
           View profile
+        </Button>
+        <Button size="sm" variant="outline" accent={colors.buyer} disabled={busy} onPress={onConnect}>
+          Connect
         </Button>
         <Button size="sm" accent={colors.buyer} disabled={busy} onPress={onRespond}>
           {busy ? "Sending…" : replied ? "Update reply" : "Reply"}

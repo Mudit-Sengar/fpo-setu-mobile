@@ -266,6 +266,30 @@ export async function createRequest(
   });
 }
 
+/**
+ * Deletes one of this session's own postings outright.
+ *
+ * Responses to it, its message thread and any notifications pointing at it go
+ * too — `request_responses`, `conversations.request_id` and
+ * `notifications.request_id` are all `ON DELETE CASCADE` (migrations 004, 005).
+ * An order that grew out of an accepted response is not touched: `orders`
+ * references the request and response with `ON DELETE SET NULL`, so a trade
+ * that already happened keeps its own record independent of the posting that
+ * led to it.
+ */
+export async function deleteRequest(ctx: SessionContext | null, requestId: number): Promise<void> {
+  if (ctx == null) throw new AuthzError("You are signed out.");
+  await withWrite("deleteRequest", async (db) => {
+    const owned = (await db.execute(
+      "SELECT 1 AS ok FROM requests WHERE id = ? AND author_party_id = ?;",
+      [requestId, ctx.partyId])).rows ?? [];
+    if (owned.length === 0) {
+      throw new AuthzError("You can only delete your own postings.");
+    }
+    await db.execute("DELETE FROM requests WHERE id = ?;", [requestId]);
+  });
+}
+
 /** Withdraws one of this session's own requests. */
 export async function cancelRequest(ctx: SessionContext | null, requestId: number): Promise<void> {
   if (ctx == null) throw new AuthzError("You are signed out.");
@@ -331,15 +355,52 @@ export async function respond(
         input.offeredPrice ?? null, input.offeredUnit ?? null],
     );
 
+    const authorPartyId = Number(rows[0].author_party_id);
+    const conversationId = await ensureRequestThread(db, requestId, [authorPartyId, ctx.partyId]);
+    const text = (input.message ?? "").trim();
+    if (text !== "") {
+      await db.execute(
+        "INSERT INTO messages (conversation_id, sender_party_id, body) VALUES (?,?,?);",
+        [conversationId, ctx.partyId, text]);
+    }
+
     await notifyParty(db, {
-      recipient: Number(rows[0].author_party_id),
+      recipient: authorPartyId,
       actor: ctx.partyId,
       type: "request_response",
       title: "New reply to your posting",
       body: input.message ?? null,
       requestId,
+      conversationId,
     });
   });
+}
+
+/**
+ * Opens (or reuses) the thread attached to a request, so a reply to a posting
+ * shows up in Messages the same way an accepted connection does — see
+ * `ensureThread` in networkRepository.ts, which this mirrors for `request_id`
+ * instead of `connection_id`.
+ */
+async function ensureRequestThread(
+  db: { execute: (sql: string, p?: (string | number)[]) => Promise<{ rows?: Record<string, unknown>[] }> },
+  requestId: number, participants: number[],
+): Promise<number> {
+  const existing = (await db.execute(
+    "SELECT id FROM conversations WHERE request_id = ?;", [requestId])).rows ?? [];
+  if (existing.length > 0) return Number(existing[0].id);
+
+  await db.execute("INSERT INTO conversations (request_id) VALUES (?);", [requestId]);
+  const created = (await db.execute(
+    "SELECT id FROM conversations WHERE request_id = ?;", [requestId])).rows ?? [];
+  const conversationId = Number(created[0].id);
+
+  for (const partyId of participants) {
+    await db.execute(
+      "INSERT OR IGNORE INTO conversation_participants (conversation_id, party_id) VALUES (?, ?);",
+      [conversationId, partyId]);
+  }
+  return conversationId;
 }
 
 /**

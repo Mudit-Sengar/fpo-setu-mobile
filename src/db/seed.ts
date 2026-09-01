@@ -2,7 +2,7 @@ import type { DB } from "@op-engineering/op-sqlite";
 import {
   BUYERS, COMPLIANCE_EXPLAINER, COMPLIANCE_PARTNERS, DAILY_APMC_PRICES, EXPERTS,
   FARMER_COURSES, FARMER_SCHEMES, FARMERS, FPO_CUMULATIVE,
-  FPO_MEETINGS, FPOS, GOVT_SCHEMES, INPUT_NEEDS, LEDGER, LENDERS, LOGISTICS_PROVIDERS,
+  FPO_MEETINGS, FPOS, GOVT_SCHEMES, GOVT_SCHEME_URLS, INPUT_NEEDS, LEDGER, LENDERS, LOGISTICS_PROVIDERS,
   MEMBER_ENGAGEMENT, MENTORS, MGMT_COURSES, PRICE_HISTORY, SELLER_FEEDBACK,
   SIMILAR_FARMERS, SUPPLIER_POSTINGS, SUPPLIERS, TIER_SCORES, VALUE_COURSES,
   farmerSchemeUrl, tierOpportunities, type Tier,
@@ -95,14 +95,9 @@ export async function seedIfEmpty(db: DB): Promise<void> {
       }
     }
 
-    // Was: hardcoded constants inside MyFpoScreen's MyFpoDetails().
-    for (const f of FPOS) {
-      await run(
-        `INSERT INTO fpo_monthly_summary (fpo_id, month_sold_q, sell_price, onward_price, fpo_profit)
-         VALUES (?,?,?,?,?);`,
-        [f.id, 8, 900, 1200, 82000],
-      );
-    }
+    // fpo_monthly_summary used to be seeded here with the same four numbers for
+    // every FPO. It's no longer read at all — fpoRepository.getMonthlySummary
+    // now computes "this month" live from farmer_txns/ledger_entries/orders.
 
     const defaultFpo = FPOS[0].id;
 
@@ -218,9 +213,10 @@ export async function seedIfEmpty(db: DB): Promise<void> {
     /* ------------------------------------------------------------- Schemes */
     for (const s of GOVT_SCHEMES) {
       const res = await run(
-        `INSERT INTO schemes_fpo (name, body, description, eligibility, min_members, min_compliance)
-         VALUES (?,?,?,?,?,?);`,
-        [s.name, s.body, s.desc, s.eligibility, s.minMembers ?? null, s.minCompliance ?? null],
+        `INSERT INTO schemes_fpo (name, body, description, eligibility, min_members, min_compliance, url)
+         VALUES (?,?,?,?,?,?,?);`,
+        [s.name, s.body, s.desc, s.eligibility, s.minMembers ?? null, s.minCompliance ?? null,
+          GOVT_SCHEME_URLS[s.name] ?? null],
       );
       const schemeId = Number(res.insertId ?? 0);
       for (const t of s.eligibleTiers) {

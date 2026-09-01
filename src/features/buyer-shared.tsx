@@ -65,26 +65,6 @@ export function ModeToggle() {
   );
 }
 
-/**
- * Ported from the web app's buyer.tsx header Stepper. Purely decorative there
- * (not wired to actual step completion) — same here.
- */
-export function Stepper() {
-  const steps = ["Onboarding", "Connect with Farmer or FPO", "Reviews & Feedback"];
-  return (
-    <View style={s.stepper}>
-      {steps.map((st, i) => (
-        <View key={st} style={s.stepItem}>
-          <View style={s.stepNum}>
-            <Text size="xxs" weight="700" color={colors.buyerForeground} noTranslate>{String(i + 1)}</Text>
-          </View>
-          <Text size="xxs" weight="500" color={colors.buyer} numberOfLines={2} style={{ flex: 1 }}>{st}</Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
 const s = StyleSheet.create({
   radioRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 6 },
   radio: {
@@ -92,13 +72,4 @@ const s = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.buyer },
-  stepper: {
-    flexDirection: "row", alignItems: "center", gap: spacing.sm,
-    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
-  },
-  stepItem: { flexDirection: "row", alignItems: "center", gap: 5, flex: 1 },
-  stepNum: {
-    width: 20, height: 20, borderRadius: 10, backgroundColor: colors.buyer,
-    alignItems: "center", justifyContent: "center",
-  },
 });

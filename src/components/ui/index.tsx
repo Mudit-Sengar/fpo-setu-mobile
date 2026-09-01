@@ -218,7 +218,9 @@ export function Input({
       returnKeyType={returnKeyType}
       style={[
         s.input,
-        multiline ? { height: (numberOfLines ?? 3) * 22 + 16, textAlignVertical: "top" } : null,
+        // minHeight, not height: a fixed height clips wrapped text when the
+        // system font is scaled up for accessibility (larger Android font size).
+        multiline ? { minHeight: (numberOfLines ?? 3) * 22 + 16, textAlignVertical: "top" } : null,
         style,
       ]}
     />
@@ -473,6 +475,44 @@ export function Dialog({
         </View>
       </View>
     </Modal>
+  );
+}
+
+/**
+ * A yes/no gate in front of a destructive action — deleting a ledger entry, a
+ * meeting, a posting. Every delete flow in the app shares this one component so
+ * "are you sure" reads and behaves the same everywhere instead of each screen
+ * inventing its own.
+ */
+export function ConfirmDialog({
+  visible,
+  title,
+  message,
+  confirmLabel = "Delete",
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  visible: boolean;
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Dialog visible={visible} onClose={onCancel} title={title}>
+      <Text size="sm">{message}</Text>
+      <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
+        <Button variant="outline" style={{ flex: 1 }} disabled={busy} onPress={onCancel}>
+          Cancel
+        </Button>
+        <Button variant="destructive" style={{ flex: 1 }} disabled={busy} onPress={onConfirm}>
+          {busy ? "Deleting…" : confirmLabel}
+        </Button>
+      </View>
+    </Dialog>
   );
 }
 
